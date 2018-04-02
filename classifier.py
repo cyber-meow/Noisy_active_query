@@ -12,22 +12,26 @@ dtype = torch.FloatTensor
 
 class Classifier(object):
 
-    def __init__(self, model, pho_p=0, pho_n=0):
+    def __init__(self, model, pho_p=0, pho_n=0, lr=5e-3):
         self.model = model
-        self.optimizer = optim.Adam(model.parameters(), lr=5e-3)
+        self.optimizer = optim.Adam(
+            model.parameters(), lr=lr, weight_decay=1e-2)
         self.pho_p = pho_p
         self.pho_n = pho_n
+        self.counter = 0
 
-    def train(self, labeled_set, test_set, retrain_epochs, used_size=None):
+    def train(self, labeled_set, test_set,
+              batch_size, retrain_epochs, used_size=None):
         self.model.train()
         if used_size is None:
             train_loader = data.DataLoader(
-                labeled_set, batch_size=10, shuffle=True, num_workers=2)
+                labeled_set, batch_size=batch_size,
+                shuffle=True, num_workers=2)
         else:
             indices = np.random.choice(
                 len(labeled_set), used_size, replace=False)
             train_loader = data.DataLoader(
-                labeled_set, batch_size=10,
+                labeled_set, batch_size=batch_size,
                 sampler=data.sampler.SubsetRandomSampler(indices),
                 num_workers=2)
         test_loader = torch.utils.data.DataLoader(
@@ -35,6 +39,7 @@ class Classifier(object):
         for epoch in range(retrain_epochs):
             self.train_step(train_loader, epoch)
             self.test(test_loader)
+            self.counter += 1
 
     def train_step(self, train_loader, epoch):
         for batch_idx, (x, target, w) in enumerate(train_loader):
@@ -53,10 +58,12 @@ class Classifier(object):
                     epoch, batch_idx+1, loss.data[0]))
 
     def basic_loss(self, fx):
-        negative_logistic = nn.LogSigmoid()
-        return -negative_logistic(fx)
-        # sigmoid = nn.Sigmoid()
-        # return sigmoid(-fx)
+        if self.counter <= 1:
+            negative_logistic = nn.LogSigmoid()
+            return -negative_logistic(fx)
+        else:
+            sigmoid = nn.Sigmoid()
+            return sigmoid(-fx)
 
     def compute_loss(self, output, target, w=None):
         a = (self.pho_p - self.pho_n)/2

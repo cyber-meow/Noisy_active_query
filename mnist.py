@@ -43,7 +43,7 @@ train_labels = (train_labels-3)/2.5-1
 train_data = train_data[used_idxs]
 train_labels = train_labels[used_idxs]
 init_weight = 300
-init_size = 300
+init_size = 2000
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
@@ -74,34 +74,41 @@ class Net(nn.Module):
         x = F.max_pool2d(x, 2, 2)
         x = x.view(-1, 4*4*10)
         x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
         x = self.fc2(x)
         return x
 
 
 incr_times = 1
-retrain_epochs = 6
+batch_size = 100
+retrain_epochs = 20
+learning_rate = 5e-3
 query_batch_size = 10
 # cls = Classifier(Net(pho_p=pho_p, pho_n=pho_n))
-clss = [Classifier(Net(), pho_p=pho_p, pho_n=pho_n) for _ in range(3)]
+clss = [Classifier(Net(), pho_p=pho_p, pho_n=pho_n, lr=learning_rate)
+        for _ in range(1)]
 # clss = [Classifier(Net().cuda()) for _ in range(5)]
 clss_rand = [deepcopy(cls) for cls in clss]
-used_size = 290
+used_size = 900
 
 
 for incr in range(incr_times):
 
     print('\nincr {}'.format(incr))
 
+    '''
     print('\nActive Query'.format(incr))
     for i, cls in enumerate(clss):
         print('classifier {}'.format(i))
-        cls.train(labeled_set, test_set, retrain_epochs, used_size)
+        cls.train(labeled_set, test_set, batch_size,
+                  retrain_epochs, used_size)
     IWALQuery().query(unlabeled_set, labeled_set, query_batch_size, clss)
     used_size += query_batch_size - 1
+    '''
 
     print('\nRandom Query'.format(incr))
     for i, cls in enumerate(clss_rand):
         print('classifier {}'.format(i))
-        cls.train(labeled_set_rand, test_set, retrain_epochs)
+        cls.train(labeled_set_rand, test_set, batch_size, retrain_epochs)
     RandomQuery().query(
         unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
