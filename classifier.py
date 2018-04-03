@@ -15,12 +15,14 @@ class Classifier(object):
             model.parameters(), lr=lr, weight_decay=1e-2)
         self.pho_p = pho_p
         self.pho_n = pho_n
-        self.counter = 0
+        self.threshold = 1
 
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
               convex_epochs=None, used_size=None, test_on_train=False):
+
         self.model.train()
+
         if used_size is None:
             train_loader = data.DataLoader(
                 labeled_set, batch_size=batch_size,
@@ -32,9 +34,22 @@ class Classifier(object):
                 labeled_set, batch_size=batch_size,
                 sampler=data.sampler.SubsetRandomSampler(indices),
                 num_workers=2)
+
         test_loader = torch.utils.data.DataLoader(
             test_set, batch_size=1, shuffle=True, num_workers=2)
+
         for epoch in range(retrain_epochs):
+
+            # output = self.model(
+            #     Variable(labeled_set.data_tensor).type(settings.dtype))
+            # fxs = (output.data.cpu()
+            #        * labeled_set.target_tensor).numpy().reshape(-1)
+            # negative_fxs = fxs[fxs <= 0]
+            # tmp = (1 - np.array(negative_fxs))/2
+            # self.threshold = np.percentile(tmp, 30).item()
+            # print(self.threshold)
+            # print(np.median(tmp))
+
             if convex_epochs is not None and epoch >= convex_epochs:
                 self.train_step(train_loader, epoch, convex_loss=False)
             else:
@@ -68,6 +83,7 @@ class Classifier(object):
         else:
             sigmoid = nn.Sigmoid()
             return sigmoid(-fx)
+            # return torch.clamp((1-fx)/2, 0, self.threshold)
 
     def compute_loss(self, output, target, convex_loss=True, w=None):
         a = (self.pho_p - self.pho_n)/2
