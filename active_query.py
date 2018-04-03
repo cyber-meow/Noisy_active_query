@@ -1,10 +1,7 @@
 import torch
 from torch.autograd import Variable
 import numpy as np
-
-
-dtype = torch.FloatTensor
-# dtype = torch.cuda.FloatTensor
+import settings
 
 
 class ActiveQuery(object):
@@ -49,7 +46,7 @@ class IWALQuery(ActiveQuery):
 
         for cls in clss:
             output = cls.model(
-                Variable(unlabeled_set.data_tensor).type(dtype)).cpu()
+                Variable(unlabeled_set.data_tensor).type(settings.dtype)).cpu()
             predict = torch.sign(output).data.numpy().reshape(-1)
             p_predict = np.logical_or(predict == 1, p_predict)
             n_predict = np.logical_or(predict == -1, n_predict)

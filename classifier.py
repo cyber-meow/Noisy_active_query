@@ -4,10 +4,7 @@ import torch.utils.data as data
 import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
-
-
-dtype = torch.FloatTensor
-# dtype = torch.cuda.FloatTensor
+import settings
 
 
 class Classifier(object):
@@ -21,7 +18,8 @@ class Classifier(object):
         self.counter = 0
 
     def train(self, labeled_set, test_set,
-              batch_size, retrain_epochs, used_size=None):
+              batch_size, retrain_epochs,
+              convex_epochs=None, used_size=None, test_on_train=False):
         self.model.train()
         if used_size is None:
             train_loader = data.DataLoader(
@@ -37,40 +35,46 @@ class Classifier(object):
         test_loader = torch.utils.data.DataLoader(
             test_set, batch_size=1, shuffle=True, num_workers=2)
         for epoch in range(retrain_epochs):
-            self.train_step(train_loader, epoch)
-            self.test(test_loader)
-            self.counter += 1
+            if convex_epochs is not None and epoch >= convex_epochs:
+                self.train_step(train_loader, epoch, convex_loss=False)
+            else:
+                self.train_step(train_loader, epoch)
+            if test_on_train:
+                self.test(train_loader, 'Train')
+            self.test(test_loader, 'Test')
 
-    def train_step(self, train_loader, epoch):
+    def train_step(self, train_loader, epoch, convex_loss=True):
+        total_loss = 0
         for batch_idx, (x, target, w) in enumerate(train_loader):
             self.optimizer.zero_grad()
             x, target, w = (
-                Variable(x).type(dtype),
-                Variable(target).type(dtype),
-                Variable(w).type(dtype))
+                Variable(x).type(settings.dtype),
+                Variable(target).type(settings.dtype),
+                Variable(w).type(settings.dtype))
             output = self.model(x)
-            _, loss = self.compute_loss(output, target, w)
+            _, loss = self.compute_loss(output, target, convex_loss, w)
+            total_loss += loss.data[0]
             loss.backward()
             self.optimizer.step()
         if (batch_idx+1) % 100 == 0:
             print(
                 '==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
-                    epoch, batch_idx+1, loss.data[0]))
+                    epoch, batch_idx+1, total_loss))
 
-    def basic_loss(self, fx):
-        if self.counter <= 1:
+    def basic_loss(self, fx, convex_loss=True):
+        if convex_loss:
             negative_logistic = nn.LogSigmoid()
             return -negative_logistic(fx)
         else:
             sigmoid = nn.Sigmoid()
             return sigmoid(-fx)
 
-    def compute_loss(self, output, target, w=None):
+    def compute_loss(self, output, target, convex_loss=True, w=None):
         a = (self.pho_p - self.pho_n)/2
         b = (self.pho_p + self.pho_n)/2
         pho_y = a * target + b
         pho_ny = self.pho_p + self.pho_n - pho_y
-        loss = self.basic_loss(target*output)
+        loss = self.basic_loss(target*output, convex_loss)
         loss = (1-pho_ny+pho_y) * loss
         if w is not None:
             assert w.shape == loss.shape
@@ -78,17 +82,20 @@ class Classifier(object):
         total_loss = torch.sum(loss)
         return loss, total_loss
 
-    def test(self, test_loader):
+    def test(self, test_loader, set_name):
         self.model.eval()
         test_loss = 0
         correct = 0
-        for x, target in test_loader:
-            x, target = Variable(x).type(dtype), Variable(target).type(dtype)
+        for item in test_loader:
+            x, target = item[0], item[1]
+            x, target = (
+                Variable(x).type(settings.dtype),
+                Variable(target).type(settings.dtype))
             output = self.model(x)
             pred = torch.sign(output)
             correct += torch.sum(pred.eq(target).float()).data[0]
         test_loss /= len(test_loader.dataset)
         print(
-            'Test set: Accuracy: {}/{} ({:.2f}%)'.format(
-                correct, len(test_loader.dataset),
+            '{} set: Accuracy: {}/{} ({:.2f}%)'.format(
+                set_name, correct, len(test_loader.dataset),
                 100. * correct / len(test_loader.dataset)))

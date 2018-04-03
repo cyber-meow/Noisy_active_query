@@ -5,13 +5,45 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 
+import argparse
+from copy import deepcopy
 # import matplotlib.pyplot as plt
 import numpy as np
 
 import dataset
+import settings
 from active_query import RandomQuery, IWALQuery
 from classifier import Classifier
-from copy import deepcopy
+
+
+init_weight = 50
+init_size = 500
+
+pho_p = 0.5
+pho_n = 0
+
+batch_size = 100
+num_clss = 3
+learning_rate = 5e-3
+incr_times = 4
+test_on_train = False
+
+retrain_epochs = 4
+convex_epochs = 2
+query_batch_size = 60
+reduced_sample_size = 5
+used_size = 450
+
+
+parser = argparse.ArgumentParser(description='MNIST noise active learning')
+
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='disables CUDA training')
+args = parser.parse_args()
+args.cuda = not args.no_cuda and torch.cuda.is_available()
+
+if args.cuda:
+    settings.dtype = torch.cuda.FloatTensor
 
 
 # torchvision.datasets.MNIST outputs a set of PIL images
@@ -42,14 +74,9 @@ train_labels = (train_labels-3)/2.5-1
 
 train_data = train_data[used_idxs]
 train_labels = train_labels[used_idxs]
-init_weight = 300
-init_size = 2000
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
-
-pho_p = 0.5
-pho_n = 0
 
 unlabeled_set, labeled_set = dataset.datasets_initialization(
     train_data, train_labels, init_size,
@@ -79,36 +106,37 @@ class Net(nn.Module):
         return x
 
 
-incr_times = 1
-batch_size = 100
-retrain_epochs = 20
-learning_rate = 5e-3
-query_batch_size = 10
-# cls = Classifier(Net(pho_p=pho_p, pho_n=pho_n))
-clss = [Classifier(Net(), pho_p=pho_p, pho_n=pho_n, lr=learning_rate)
-        for _ in range(1)]
-# clss = [Classifier(Net().cuda()) for _ in range(5)]
+def create_new_classifier():
+    model = Net().cuda() if args.cuda else Net()
+    cls = Classifier(
+            model,
+            pho_p=pho_p,
+            pho_n=pho_n,
+            lr=learning_rate)
+    return cls
+
+
+clss = [create_new_classifier() for _ in range(num_clss)]
 clss_rand = [deepcopy(cls) for cls in clss]
-used_size = 900
 
 
 for incr in range(incr_times):
 
     print('\nincr {}'.format(incr))
 
-    '''
     print('\nActive Query'.format(incr))
     for i, cls in enumerate(clss):
         print('classifier {}'.format(i))
         cls.train(labeled_set, test_set, batch_size,
-                  retrain_epochs, used_size)
+                  retrain_epochs, convex_epochs, used_size, test_on_train)
     IWALQuery().query(unlabeled_set, labeled_set, query_batch_size, clss)
-    used_size += query_batch_size - 1
-    '''
+    used_size += query_batch_size - reduced_sample_size
 
     print('\nRandom Query'.format(incr))
     for i, cls in enumerate(clss_rand):
         print('classifier {}'.format(i))
-        cls.train(labeled_set_rand, test_set, batch_size, retrain_epochs)
+        cls.train(
+            labeled_set_rand, test_set, batch_size,
+            retrain_epochs, convex_epochs, test_on_train=test_on_train)
     RandomQuery().query(
         unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
