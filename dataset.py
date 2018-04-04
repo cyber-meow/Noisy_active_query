@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-class WeigthedTensorDataset(torch.utils.data.Dataset):
+class WeightedTensorDataset(torch.utils.data.Dataset):
     """Dataset wrapping data and target tensors.
 
     Each sample will be retrieved by indexing both tensors along the first
@@ -55,7 +55,7 @@ def datasets_initialization(
             labels[i] = 1
     unlabeled_set = torch.utils.data.TensorDataset(
         data[init_size:], labels[init_size:])
-    labeled_set = WeigthedTensorDataset(
+    labeled_set = WeightedTensorDataset(
         data[:init_size], labels[:init_size],
         init_weight * torch.ones(init_size, 1))
     return unlabeled_set, labeled_set

@@ -101,5 +101,5 @@ ENV/
 .mypy_cache/
 
 MNIST/
-running_results/
+pics/
 *.swp

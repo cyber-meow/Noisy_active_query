@@ -15,14 +15,15 @@ bootstrap_size = 70
 bootstrap_ratio = 0.7
 init_w = 300
 
-pho_p = 0.4
-pho_n = 0.1
+pho_p = 0.7
+pho_n = 0
 pho_p_c = pho_p
 pho_n_c = pho_n
 
 num_clss = 6
-incr_size = 8
-incr_times = 7
+incr_size = 12
+incr_times = 10
+convex_epochs = 1000
 retrain_epochs = 12000
 num_epochs = 16000
 final_epochs = 20000
@@ -59,13 +60,12 @@ class NoisyLearning(object):
 
     input_size = 2
     output_size = 1
-    H = 10
+    H = 5
     idd = 0
 
     def __init__(self, pho_p=0, pho_n=0, lr=5e-3):
         self.model = TwoLayerNet(self.input_size, self.H, self.output_size)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        self.training_points = []
         assert(pho_p + pho_n < 1)
         self.pho_p = pho_p
         self.pho_n = pho_n
@@ -95,24 +95,28 @@ class NoisyLearning(object):
         b = (self.pho_p + self.pho_n)/2
         pho_y = a * targets + b
         pho_ny = self.pho_p + self.pho_n - pho_y
-        logistic_y = self.basic_loss(targets*outputs, typ=typ)
-        logistic_ny = self.basic_loss(-targets*outputs, typ=typ)
-        loss = (1-pho_ny)*logistic_y - pho_y*logistic_ny
+        loss = self.basic_loss(targets*outputs, typ=typ)
+        loss = (1-pho_ny+pho_y) * loss
+        # logistic_y = self.basic_loss(targets*outputs, typ=typ)
+        # logistic_ny = self.basic_loss(-targets*outputs, typ=typ)
+        # loss = (1-pho_ny)*logistic_y - pho_y*logistic_ny
         if ws is not None:
             assert ws.shape == loss.shape
             loss *= ws
         total_loss = torch.sum(loss)/(1-self.pho_n-self.pho_p)
         return loss, total_loss
 
-    def train(self, x_train, y_train, num_epochs,
-              ws=None, typ='sig', pri=False):
-        self.training_points.extend(x_train)
+    def train(self, x_train, y_train, num_epochs, convex_epochs,
+              ws=None, pri=False):
         inputs = Variable(torch.from_numpy(x_train)).float()
         targets = Variable(torch.from_numpy(y_train)).view(-1, 1).float()
         if ws is not None:
             ws = Variable(torch.from_numpy(ws).float(), requires_grad=False)
         for i in range(num_epochs):
-            loss = self.train_step(inputs, targets, ws=ws, typ=typ)
+            if i < convex_epochs:
+                loss = self.train_step(inputs, targets, ws=ws, typ='lg')
+            else:
+                loss = self.train_step(inputs, targets, ws=ws, typ='sig')
             if pri and i % 2000 == 0:
                 print('Epoch {}, Loss: {:.4f}'.format(i, loss.data[0]))
                 # self.model.plot_boundary(ax)
@@ -128,10 +132,6 @@ class NoisyLearning(object):
         inputs = Variable(torch.from_numpy(x_test)).float()
         return np.sum(
             self.predict(inputs).data.numpy() == y_test.reshape(-1, 1)) / n
-
-    def plot_training_points(self, **kwargs):
-        tx, ty = np.array(self.training_points).T
-        plt.scatter(tx, ty, **kwargs)
 
 
 def bootstrap(xs, ys, ws, m):
@@ -206,8 +206,6 @@ cx, cy = x_init[y_init == -1].T
 plt.scatter(cx, cy, s=3, c='black', alpha=0.2)
 plt.pause(0.05)
 
-x_all_v = Variable(torch.from_numpy(x_all)).float()
-
 
 tr_x = x_init
 tr_y = y_init
@@ -219,10 +217,14 @@ kept_cls = NoisyLearning(pho_p=pho_p_c, pho_n=pho_n_c, lr=2e-3)
 conts = []
 cm = plt.get_cmap('gist_rainbow')
 
+clss = new_classifs(kept_cls, num_clss)
 
-for trial in range(incr_times):
+
+for trial in range(incr_times+1):
 
     clss = new_classifs(kept_cls, num_clss)
+
+    n = len(x_all)
 
     min_ls_p = np.inf * np.ones([n, 1])
     max_ls_p = -np.inf * np.ones([n, 1])
@@ -235,7 +237,7 @@ for trial in range(incr_times):
     for i, cls in enumerate(clss):
         # bootstrap_size = int(tr_x.shape[0]*bootstrap_ratio)
         xs, ys, ws = bootstrap(tr_x, tr_y, tr_w, bootstrap_size)
-        cls.train(xs, ys, retrain_epochs, ws=ws)
+        cls.train(xs, ys, retrain_epochs, convex_epochs, ws=ws)
         accuracy = cls.get_accuracy(x_test, y_test)
         print(accuracy)
         if trial >= 1:
@@ -244,23 +246,24 @@ for trial in range(incr_times):
             del conts[0]
         conts.append(cls.model.plot_boundary(ax, colors=[cm(i/num_clss)]))
         plt.pause(0.05)
-        outputs = cls.model(x_all_v)
+        outputs = cls.model(Variable(torch.from_numpy(x_all)).float())
         prt = torch.sign(outputs).data.numpy().reshape(-1)
         p_predict = np.logical_or(prt == 1, p_predict)
         n_predict = np.logical_or(prt == -1, n_predict)
         loss_p, _ = cls.compute_loss(
-            outputs, Variable(torch.ones(n, 1).float()), typ='sig')
+            outputs, Variable(torch.ones(n, 1).float()), typ='lg')
         loss_n, _ = cls.compute_loss(
-            outputs, Variable(-torch.ones(n, 1).float()), typ='sig')
+            outputs, Variable(-torch.ones(n, 1).float()), typ='lg')
         # loss_p = np.maximum(loss.data.numpy(), 0)
         min_ls_p = np.minimum(min_ls_p, loss_p.data.numpy())
         max_ls_p = np.maximum(max_ls_p, loss_p.data.numpy())
         min_ls_n = np.minimum(min_ls_n, loss_n.data.numpy())
         max_ls_n = np.maximum(max_ls_n, loss_n.data.numpy())
 
-    ls_diffs_p = (max_ls_p-min_ls_p).reshape(-1) * p_predict
-    ls_diffs_n = (max_ls_n-min_ls_n).reshape(-1) * n_predict
-    ls_diffs = np.maximum(ls_diffs_p, ls_diffs_n)
+    ls_diffs_p = (max_ls_p-min_ls_p).reshape(-1)  # * p_predict
+    ls_diffs_n = (max_ls_n-min_ls_n).reshape(-1)  # * n_predict
+    disagreement_area = np.logical_and(p_predict, n_predict)
+    ls_diffs = np.maximum(ls_diffs_p, ls_diffs_n) * disagreement_area
     # ls_diffs = np.ones(pool_size)
     ls_sum = np.sum(ls_diffs)
     sampling_probs = np.minimum(incr_size*ls_diffs/ls_sum, 1)
@@ -268,15 +271,22 @@ for trial in range(incr_times):
     # x_selected = x_all[idx_largests]
     # y_selected = y_all_corrupted[idx_largests]
 
-    print(np.min(sampling_probs), np.max(sampling_probs))
+    print(np.min(sampling_probs[sampling_probs != 0]),
+          np.max(sampling_probs))
 
     to_draw = np.random.binomial(
         np.ones(n, dtype=int), sampling_probs).astype(bool)
     x_selected = x_all[to_draw]
     y_selected = y_all_corrupted[to_draw]
-    new_weights = (1/sampling_probs)[to_draw].reshape(-1, 1)
+    new_weights = 1/sampling_probs[to_draw].reshape(-1, 1)
     print(new_weights)
     # new_weights = init_w * np.ones([incr_size, 1])
+
+    idxs = np.ones(n)
+    idxs[to_draw] = False
+    idxs = np.argwhere(idxs).reshape(-1)
+    x_all = x_all[idxs]
+    y_all_corrupted = y_all_corrupted[idxs]
 
     sx, sy = x_selected.T
     plt.scatter(sx, sy, s=10, label='{}'.format(trial))
@@ -293,10 +303,10 @@ for trial in range(incr_times):
     kept_cls = best_classif(clss, tr_x, tr_y, tr_w=tr_w, typ='sig')
 
 
-if incr_times == 0:
+if incr_times == -1:
     for i in range(num_clss):
         cls = NoisyLearning(pho_p=pho_p_c, pho_n=pho_n_c)
-        cls.train(tr_x, tr_y, num_epochs, ws=tr_w, typ='sig', pri=True)
+        cls.train(tr_x, tr_y, num_epochs, convex_epochs, ws=tr_w, pri=True)
         cls.model.plot_boundary(ax, colors=[cm(i/num_clss)])
         plt.scatter([-1], [-0.5], s=1, c=cm(i/num_clss), label='{}'.format(i))
         plt.legend()
@@ -307,7 +317,7 @@ if incr_times == 0:
 else:
     cls = NoisyLearning(pho_p=pho_p_c, pho_n=pho_n_c)
     print(cls.idd)
-    cls.train(tr_x, tr_y, final_epochs, ws=tr_w, typ='sig')
+    cls.train(tr_x, tr_y, final_epochs, convex_epochs, ws=tr_w)
     cls.model.plot_boundary(ax, colors=['black'])
     plt.pause(0.05)
     accuracy = cls.get_accuracy(x_test, y_test)
