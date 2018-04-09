@@ -16,6 +16,9 @@ class Classifier(object):
         self.pho_p = pho_p
         self.pho_n = pho_n
         self.threshold = 1
+        self.best_accuracy = 0
+        self.use_logistic_threshold = 75
+        self.last_accuracy = 50
 
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
@@ -51,7 +54,12 @@ class Classifier(object):
             # print(np.median(tmp))
 
             if convex_epochs is not None and epoch >= convex_epochs:
-                self.train_step(train_loader, epoch, convex_loss=False)
+                if self.last_accuracy < self.use_logistic_threshold:
+                    print('use logistic exceptionally')
+                    self.train_step(train_loader, epoch)
+                    # self.train_step(train_loader, epoch, convex_loss=False)
+                else:
+                    self.train_step(train_loader, epoch, convex_loss=False)
             else:
                 self.train_step(train_loader, epoch)
             if test_on_train:
@@ -111,7 +119,26 @@ class Classifier(object):
             pred = torch.sign(output)
             correct += torch.sum(pred.eq(target).float()).data[0]
         test_loss /= len(test_loader.dataset)
+        self.last_accuracy = 100 * correct / len(test_loader.dataset)
+        self.best_accuracy = max(self.best_accuracy, self.last_accuracy)
+        self.use_logistic_threshold = max(
+            self.use_logistic_threshold, self.best_accuracy-5)
         print(
             '{} set: Accuracy: {}/{} ({:.2f}%)'.format(
                 set_name, correct, len(test_loader.dataset),
-                100. * correct / len(test_loader.dataset)))
+                self.last_accuracy))
+
+
+def majority_vote(clss, test_set):
+    pred = torch.zeros_like(test_set.target_tensor)
+    for cls in clss:
+        cls.model.eval()
+        output = cls.model(
+            Variable(test_set.data_tensor).type(settings.dtype))
+        pred += torch.sign(output).data.cpu()
+    pred = torch.sign(pred)
+    correct = torch.sum(pred.eq(test_set.target_tensor).float())
+    accuracy = 100 * correct / len(test_set)
+    print(
+        'Majority vote: Accuracy: {}/{} ({:.2f}%)'.format(
+            correct, len(test_set), accuracy))

@@ -1,0 +1,31 @@
+clean
+50 (45) -> 100 -- 90% -> 95%
+10 (9) x 5
+batch size 30
+learning rate 5e-3
+convex/retrain epochs 10/120
+weight decay 0
+
+phop 0.2
+80 (75) -> 170 -- 93% -> 96%
+15 (13) x 6
+batch size 50
+leanrning rate 5e-3
+convex/retrain epochs 10/120
+weight decay 0
+
+phop 0.4
+100 (90) -> 300 -- 92% -> 97%
+20 (18) x 10
+batch size 50
+learning rate 5e-3
+convex/retrain epcohs 10/120
+weight decay 1e-2
+
+phop 0.1 phon 0.1
+80 (75) -> 200 -- 92% -> 95%
+15 (13) x 8
+batch size 50
+learning rate 5e-3
+convex/retrain epcohs 10/120
+weight decay 1e-2

@@ -15,14 +15,14 @@ bootstrap_size = 70
 bootstrap_ratio = 0.7
 init_w = 300
 
-pho_p = 0.7
+pho_p = 0.5
 pho_n = 0
 pho_p_c = pho_p
 pho_n_c = pho_n
 
-num_clss = 6
-incr_size = 12
-incr_times = 10
+num_clss = 2
+incr_size = 6
+incr_times = 8
 convex_epochs = 1000
 retrain_epochs = 12000
 num_epochs = 16000
@@ -60,7 +60,7 @@ class NoisyLearning(object):
 
     input_size = 2
     output_size = 1
-    H = 5
+    H = 6
     idd = 0
 
     def __init__(self, pho_p=0, pho_n=0, lr=5e-3):
@@ -69,6 +69,9 @@ class NoisyLearning(object):
         assert(pho_p + pho_n < 1)
         self.pho_p = pho_p
         self.pho_n = pho_n
+        self.best_accuracy = 0
+        self.use_logistic_threshold = 75
+        self.last_accuracy = 50
         self.idd = NoisyLearning.idd
         NoisyLearning.idd += 1
 
@@ -106,8 +109,8 @@ class NoisyLearning(object):
         total_loss = torch.sum(loss)/(1-self.pho_n-self.pho_p)
         return loss, total_loss
 
-    def train(self, x_train, y_train, num_epochs, convex_epochs,
-              ws=None, pri=False):
+    def train(self, x_train, y_train, x_test, y_test,
+              num_epochs, convex_epochs, ws=None, pri=False):
         inputs = Variable(torch.from_numpy(x_train)).float()
         targets = Variable(torch.from_numpy(y_train)).view(-1, 1).float()
         if ws is not None:
@@ -116,7 +119,12 @@ class NoisyLearning(object):
             if i < convex_epochs:
                 loss = self.train_step(inputs, targets, ws=ws, typ='lg')
             else:
-                loss = self.train_step(inputs, targets, ws=ws, typ='sig')
+                if self.last_accuracy < self.use_logistic_threshold:
+                    # print('use logistic exceptionally')
+                    loss = self.train_step(inputs, targets, ws=ws, typ='lg')
+                else:
+                    loss = self.train_step(inputs, targets, ws=ws, typ='sig')
+            # self.get_accuracy(x_test, y_test)
             if pri and i % 2000 == 0:
                 print('Epoch {}, Loss: {:.4f}'.format(i, loss.data[0]))
                 # self.model.plot_boundary(ax)
@@ -130,8 +138,13 @@ class NoisyLearning(object):
 
     def get_accuracy(self, x_test, y_test):
         inputs = Variable(torch.from_numpy(x_test)).float()
-        return np.sum(
-            self.predict(inputs).data.numpy() == y_test.reshape(-1, 1)) / n
+        correct = np.sum(
+            self.predict(inputs).data.numpy() == y_test.reshape(-1, 1))
+        self.last_accuracy = 100 * correct / len(x_test)
+        self.best_accuracy = max(self.best_accuracy, self.last_accuracy)
+        self.use_logistic_threshold = max(
+            self.use_logistic_threshold, self.best_accuracy-5)
+        return self.last_accuracy
 
 
 def bootstrap(xs, ys, ws, m):
@@ -237,7 +250,8 @@ for trial in range(incr_times+1):
     for i, cls in enumerate(clss):
         # bootstrap_size = int(tr_x.shape[0]*bootstrap_ratio)
         xs, ys, ws = bootstrap(tr_x, tr_y, tr_w, bootstrap_size)
-        cls.train(xs, ys, retrain_epochs, convex_epochs, ws=ws)
+        cls.train(xs, ys, x_test, y_test,
+                  retrain_epochs, convex_epochs, ws=ws)
         accuracy = cls.get_accuracy(x_test, y_test)
         print(accuracy)
         if trial >= 1:
@@ -306,7 +320,8 @@ for trial in range(incr_times+1):
 if incr_times == -1:
     for i in range(num_clss):
         cls = NoisyLearning(pho_p=pho_p_c, pho_n=pho_n_c)
-        cls.train(tr_x, tr_y, num_epochs, convex_epochs, ws=tr_w, pri=True)
+        cls.train(tr_x, tr_y, x_test, y_test,
+                  num_epochs, convex_epochs, ws=tr_w, pri=True)
         cls.model.plot_boundary(ax, colors=[cm(i/num_clss)])
         plt.scatter([-1], [-0.5], s=1, c=cm(i/num_clss), label='{}'.format(i))
         plt.legend()
@@ -317,7 +332,8 @@ if incr_times == -1:
 else:
     cls = NoisyLearning(pho_p=pho_p_c, pho_n=pho_n_c)
     print(cls.idd)
-    cls.train(tr_x, tr_y, final_epochs, convex_epochs, ws=tr_w)
+    cls.train(tr_x, tr_y, x_test, y_test,
+              final_epochs, convex_epochs, ws=tr_w)
     cls.model.plot_boundary(ax, colors=['black'])
     plt.pause(0.05)
     accuracy = cls.get_accuracy(x_test, y_test)

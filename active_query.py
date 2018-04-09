@@ -33,7 +33,10 @@ class RandomQuery(ActiveQuery):
 
 class IWALQuery(ActiveQuery):
 
-    def query(self, unlabeled_set, labeled_set, k, clss):
+    def __init__(self):
+        self.weight_factor = None
+
+    def query(self, unlabeled_set, labeled_set, k, clss, weight_ratio=None):
 
         n = len(unlabeled_set)
 
@@ -72,8 +75,17 @@ class IWALQuery(ActiveQuery):
         drawn = np.random.binomial(
             np.ones(n, dtype=int), sampling_probs).astype(bool)
         drawn = torch.from_numpy(np.argwhere(drawn).reshape(-1))
-        weights = torch.from_numpy(
-            1/sampling_probs[drawn].reshape(-1, 1)).float()
+        weights = 1/sampling_probs[drawn].reshape(-1, 1)
+
+        if weight_ratio is not None:
+            if self.weight_factor is None:
+                avg_weight = np.mean(weights)
+                self.weight_factor = weight_ratio/avg_weight
+            weights *= self.weight_factor
+
+        weights = torch.from_numpy(weights).float()
         print(weights)
 
         self.update(unlabeled_set, labeled_set, drawn, weights)
+
+        return len(drawn)

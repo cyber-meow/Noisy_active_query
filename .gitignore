@@ -100,6 +100,8 @@ ENV/
 # mypy
 .mypy_cache/
 
-MNIST/
+datasets/
+running_results/
 pics/
+*.png
 *.swp

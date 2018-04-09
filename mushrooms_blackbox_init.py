@@ -1,15 +1,13 @@
 import torch
 import torch.nn as nn
-import torch.utils.data as data
+import torch.utils.data
 import torch.nn.functional as F
-import torchvision
-import torchvision.transforms as transforms
+from torch.autograd import Variable
 
 import argparse
-# import matplotlib.pyplot as plt
 import numpy as np
-from torch.autograd import Variable
-# from sklearn.decomposition import PCA
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 import settings
 from classifier import Classifier
@@ -17,26 +15,25 @@ from dataset import WeightedTensorDataset
 
 
 init_weight = 1
-init_p_size = 125  # 650
-init_n_size = 125  # 450
-init_p_un_size = 0  # 1000
-init_n_un_size = 0  # 500
+
+init_p_size = 2500
+init_n_size = 2500
+init_p_un_size = 0
+init_n_un_size = 0
 # uncertainty_pool = 3500
 uncertainty_pool_p = 1000
 uncertainty_pool_n = 1000
 
-pho_p = 0.1
+pho_p = 0
 pho_n = 0
 
-batch_size = 40
+batch_size = 200
 num_clss = 1
-learning_rate = 1e-3
+learning_rate = 5e-3
 test_on_train = False
 
-retrain_epochs = 120
-convex_epochs = 10
-
-n_pca_components = 784
+retrain_epochs = 20
+convex_epochs = 5
 
 
 parser = argparse.ArgumentParser(description='MNIST noise active learning')
@@ -50,102 +47,65 @@ if args.cuda:
     settings.dtype = torch.cuda.FloatTensor
 
 
-# torchvision.datasets.MNIST outputs a set of PIL images
-# We transform them to tensors
-transform = transforms.Compose(
-    [transforms.ToTensor(), transforms.Normalize((0.5,), (1.0,))])
+data = pd.read_csv("datasets/mushrooms/mushrooms.csv")
 
-# Load and transform data
-mnist = torchvision.datasets.MNIST(
-    'datasets/MNIST', train=True, download=True, transform=transform)
+target = 'class'
+labels = data[target]
 
-mnist_test = torchvision.datasets.MNIST(
-    'datasets/MNIST', train=False, download=True, transform=transform)
+features = data.drop(target, axis=1)
 
+categorical = features.columns
+features = pd.concat(
+    [features, pd.get_dummies(features[categorical])], axis=1)
+features.drop(categorical, axis=1, inplace=True)
 
-train_data = mnist.train_data.numpy()
-train_labels = mnist.train_labels.numpy()
-used_idxs = np.logical_or(train_labels == 3, train_labels == 8)
-train_labels = (train_labels-3)/2.5-1
-# used_idxs = np.logical_or(train_labels == 7, train_labels == 9)
-# train_labels = train_labels - 8
-# used_idxs = np.logical_or(train_labels == 3, train_labels == 5)
-# train_labels = train_labels - 4
+labels = pd.get_dummies(labels)['e']
+labels = labels.astype(int)*2-1
 
-# pca = PCA(n_components=n_pca_components)
-# train_data = pca.fit_transform(train_data.reshape(-1, 784))
+X_train, X_test, y_train, y_test = train_test_split(
+    features, labels, test_size=0.2, random_state=0)
 
-train_data = train_data[used_idxs]
-train_labels = train_labels[used_idxs]
-
-train_data = torch.from_numpy(train_data).unsqueeze(1).float()
-train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
+train_data = torch.from_numpy(X_train.values).float()
+train_labels = torch.from_numpy(y_train.values).unsqueeze(1).float()
 training_set = WeightedTensorDataset(
     train_data, train_labels, init_weight * torch.ones(len(train_data), 1))
 
-
-test_data = mnist_test.test_data.numpy()
-test_labels = mnist_test.test_labels.numpy()
-used_idxs = np.logical_or(test_labels == 3, test_labels == 8)
-test_labels = (test_labels-3)/2.5-1
-# used_idxs = np.logical_or(test_labels == 7, test_labels == 9)
-# test_labels = test_labels - 8
-# used_idxs = np.logical_or(test_labels == 3, test_labels == 5)
-# test_labels = test_labels - 4
-
-# test_data = pca.transform(test_data.reshape(-1, 784))
-
-test_set = data.TensorDataset(
-    torch.from_numpy(test_data[used_idxs]).unsqueeze(1).float(),
-    torch.from_numpy(test_labels[used_idxs]).unsqueeze(1).float())
+test_set = torch.utils.data.TensorDataset(
+    torch.from_numpy(X_test.values).float(),
+    torch.from_numpy(y_test.values).unsqueeze(1).float())
 
 
 class Net(nn.Module):
 
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 3, 5, 1)
-        self.conv2 = nn.Conv2d(3, 6, 5, 1)
-        self.fc1 = nn.Linear(4*4*6, 20)
-        self.fc2 = nn.Linear(20, 1)
+        self.linear1 = nn.Linear(117, 50)
+        self.linear2 = nn.Linear(50, 1)
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(-1, 4*4*6)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return x
+        h_relu = self.linear1(x).clamp(min=0)
+        y_pred = self.linear2(h_relu)
+        return y_pred
 
 
 class Linear(nn.Module):
 
     def __init__(self):
         super(Linear, self).__init__()
-        self.linear = nn.Linear(n_pca_components, 1)
+        self.linear = nn.Linear(117, 1)
 
     def forward(self, x):
-        y_pred = self.linear(x.view(-1, n_pca_components))
+        y_pred = self.linear(x)
         return y_pred
 
 
-model = Net().cuda() if args.cuda else Net()
-# model = Linear().cuda if args.cuda else Linear()
+# model = Net().cuda() if args.cuda else Net()
+model = Linear().cuda() if args.cuda else Net()
 cls = Classifier(model)
 cls.train(training_set, test_set, batch_size, 4, 1)
 output = cls.model(Variable(train_data).type(settings.dtype)).cpu()
 probs = F.sigmoid(output).data.numpy().reshape(-1)
 sorted_margin = torch.from_numpy(np.argsort(np.abs(probs-0.5)))
-
-# margin_sorted_data = train_data[sorted_margin]
-
-# grid_img = torchvision.utils.make_grid(
-#     torch.cat((margin_sorted_data[:32], margin_sorted_data[-32:]), 0))
-# plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
-# plt.show()
 
 
 p_sorted_margin = []
@@ -171,13 +131,6 @@ drawn = np.random.choice(p_un, init_p_un_size, replace=False)
 # n_un = np.argwhere(np.logical_and(n_idxs, un_idxs)).reshape(-1)
 n_un = n_sorted_margin[:uncertainty_pool_n]
 drawn2 = np.random.choice(n_un, init_n_un_size, replace=False)
-
-# plt_data = train_data[torch.from_numpy(
-#     np.concatenate([drawn[:32], drawn2[:32]]))]
-# print(plt_data)
-# grid_img = torchvision.utils.make_grid(plt_data)
-# plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
-# plt.show()
 
 dr_idxs = np.zeros(len(train_data))
 dr_idxs[drawn] = True
@@ -208,7 +161,7 @@ for i, label in enumerate(given_labels):
         given_labels[i] = 1
 
 labeled_set = WeightedTensorDataset(
-    given_data, given_labels, init_weight * torch.ones(len(given_data), 1))
+    given_data, given_labels, torch.ones(len(given_data), 1))
 print(len(labeled_set))
 
 
