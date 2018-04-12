@@ -1,5 +1,8 @@
 import torch
+import torch.utils.data
 import numpy as np
+from copy import deepcopy
+from k_center import KCenter
 
 
 class WeightedTensorDataset(torch.utils.data.Dataset):
@@ -40,22 +43,52 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
             (self.weight_tensor, weight_tensor), 0)
 
 
-def datasets_initialization(
-        data, labels, init_size, init_weight, pho_p=0, pho_n=0):
-    idxs = torch.from_numpy(np.random.permutation(data.size(0)))
-    data = data[idxs]
-    labels = labels[idxs]
+def label_corruption(labels, pho_p=0, pho_n=0):
+    corrupted_labels = deepcopy(labels)
     for i, label in enumerate(labels):
         assert label[0] == 1 or label[0] == -1
         if label[0] == 1 and np.random.random() < pho_p:
             # print('flip +1')
-            labels[i] = -1
+            corrupted_labels[i] = -1
         elif np.random.random() < pho_n:
             # print('flip -1')
-            labels[i] = 1
+            corrupted_labels[i] = 1
+    return corrupted_labels
+
+
+def datasets_initialization(data, labels, init_size, init_weight):
+    if not torch.is_tensor(data):
+        data = torch.from_numpy(data).float()
+    if not torch.is_tensor(labels):
+        labels = torch.from_numpy(labels).float()
+    idxs = torch.from_numpy(np.random.permutation(data.size(0)))
+    data = data[idxs]
+    labels = labels[idxs]
     unlabeled_set = torch.utils.data.TensorDataset(
         data[init_size:], labels[init_size:])
     labeled_set = WeightedTensorDataset(
         data[:init_size], labels[:init_size],
+        init_weight * torch.ones(init_size, 1))
+    return unlabeled_set, labeled_set
+
+
+def datasets_initialization_kcenter(
+        data, labels, init_size, init_weight, pho_p=0, pho_n=0):
+    print('kcenter initialization')
+    if torch.is_tensor(data):
+        data = data.numpy()
+    if torch.is_tensor(labels):
+        labels = labels.numpy()
+    kcenter = KCenter(data, labels)
+    for i in range(init_size-1):
+        # if i % 10 == 0:
+        #     print(i)
+        kcenter.select_one()
+    unlabeled_set = torch.utils.data.TensorDataset(
+        torch.from_numpy(kcenter.pool),
+        torch.from_numpy(kcenter.pool_y))
+    labeled_set = WeightedTensorDataset(
+        torch.from_numpy(kcenter.selected),
+        torch.from_numpy(kcenter.selected_y),
         init_weight * torch.ones(init_size, 1))
     return unlabeled_set, labeled_set

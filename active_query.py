@@ -26,9 +26,12 @@ class RandomQuery(ActiveQuery):
     def query(self, unlabeled_set, labeled_set, k, unit_weight):
         drawn = torch.from_numpy(
             np.random.choice(len(unlabeled_set), k, replace=False))
+        x_selected = unlabeled_set.data_tensor[drawn]
+        y_selected = unlabeled_set.target_tensor[drawn]
         self.update(
             unlabeled_set, labeled_set, drawn,
             unit_weight*torch.ones(k, 1))
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
 
 
 class IWALQuery(ActiveQuery):
@@ -86,6 +89,8 @@ class IWALQuery(ActiveQuery):
         weights = torch.from_numpy(weights).float()
         print(weights)
 
+        x_selected = unlabeled_set.data_tensor[drawn]
+        y_selected = unlabeled_set.target_tensor[drawn]
         self.update(unlabeled_set, labeled_set, drawn, weights)
 
-        return len(drawn)
+        return x_selected, y_selected, weights

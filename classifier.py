@@ -1,3 +1,5 @@
+import sys
+
 import torch
 import torch.nn as nn
 import torch.utils.data as data
@@ -11,20 +13,26 @@ class Classifier(object):
 
     def __init__(self, model, pho_p=0, pho_n=0, lr=5e-3):
         self.model = model
-        self.optimizer = optim.Adam(
-            model.parameters(), lr=lr, weight_decay=1e-2)
+        self.lr = lr
         self.pho_p = pho_p
         self.pho_n = pho_n
         self.threshold = 1
         self.best_accuracy = 0
         self.use_logistic_threshold = 75
         self.last_accuracy = 50
+        self.init_optimizer()
+
+    def init_optimizer(self):
+        self.optimizer = optim.Adam(
+            self.model.parameters(), lr=self.lr, weight_decay=1e-2)
 
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
-              convex_epochs=None, used_size=None, test_on_train=False):
+              convex_epochs=None, used_size=None,
+              test_interval=1, test_on_train=False):
 
         self.model.train()
+        # self.init_optimizer()
 
         if used_size is None:
             train_loader = data.DataLoader(
@@ -37,9 +45,6 @@ class Classifier(object):
                 labeled_set, batch_size=batch_size,
                 sampler=data.sampler.SubsetRandomSampler(indices),
                 num_workers=2)
-
-        test_loader = torch.utils.data.DataLoader(
-            test_set, batch_size=1, shuffle=True, num_workers=2)
 
         for epoch in range(retrain_epochs):
 
@@ -54,17 +59,20 @@ class Classifier(object):
             # print(np.median(tmp))
 
             if convex_epochs is not None and epoch >= convex_epochs:
-                if self.last_accuracy < self.use_logistic_threshold:
-                    print('use logistic exceptionally')
+                if self.last_accuracy < 75:  # self.use_logistic_threshold:
+                    print('Use logistic exceptionally')
                     self.train_step(train_loader, epoch)
                     # self.train_step(train_loader, epoch, convex_loss=False)
                 else:
                     self.train_step(train_loader, epoch, convex_loss=False)
             else:
                 self.train_step(train_loader, epoch)
-            if test_on_train:
-                self.test(train_loader, 'Train')
-            self.test(test_loader, 'Test')
+
+            if (epoch+1) % test_interval == 0 or epoch+1 == retrain_epochs:
+                sys.stdout.write('Epoch: {}  '.format(epoch))
+                if test_on_train:
+                    self.test(labeled_set, 'Train')
+                self.test(test_set, 'Test')
 
     def train_step(self, train_loader, epoch, convex_loss=True):
         total_loss = 0
@@ -79,10 +87,9 @@ class Classifier(object):
             total_loss += loss.data[0]
             loss.backward()
             self.optimizer.step()
-        if (batch_idx+1) % 100 == 0:
-            print(
-                '==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
-                    epoch, batch_idx+1, total_loss))
+            if (batch_idx+1) % 100 == 0:
+                print('==>>> Batch index: {}, Train Loss: {:.6f}'.format(
+                        batch_idx+1, total_loss))
 
     def basic_loss(self, fx, convex_loss=True):
         if convex_loss:
@@ -106,26 +113,20 @@ class Classifier(object):
         total_loss = torch.sum(loss)
         return loss, total_loss
 
-    def test(self, test_loader, set_name):
+    def test(self, test_set, set_name):
         self.model.eval()
-        test_loss = 0
-        correct = 0
-        for item in test_loader:
-            x, target = item[0], item[1]
-            x, target = (
-                Variable(x).type(settings.dtype),
-                Variable(target).type(settings.dtype))
-            output = self.model(x)
-            pred = torch.sign(output)
-            correct += torch.sum(pred.eq(target).float()).data[0]
-        test_loss /= len(test_loader.dataset)
-        self.last_accuracy = 100 * correct / len(test_loader.dataset)
+        x = Variable(test_set.data_tensor).type(settings.dtype)
+        target = Variable(test_set.target_tensor).type(settings.dtype)
+        output = self.model(x)
+        pred = torch.sign(output)
+        correct = torch.sum(pred.eq(target).float()).data[0]
+        self.last_accuracy = 100 * correct / len(test_set)
         self.best_accuracy = max(self.best_accuracy, self.last_accuracy)
         self.use_logistic_threshold = max(
             self.use_logistic_threshold, self.best_accuracy-5)
         print(
             '{} set: Accuracy: {}/{} ({:.2f}%)'.format(
-                set_name, correct, len(test_loader.dataset),
+                set_name, correct, len(test_set),
                 self.last_accuracy))
 
 

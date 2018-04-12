@@ -15,28 +15,31 @@ from classifier import Classifier, majority_vote
 
 init_weight = 1
 weight_ratio = 2
-init_size = 100
+init_size = 200
 
 pho_p = 0.1
 pho_n = 0.1
 
 batch_size = 50
-num_clss = 1
+num_clss = 5
 learning_rate = 5e-3
-incr_times = 0
+incr_times = 8
 test_on_train = False
 
 retrain_epochs = 120
 convex_epochs = 10
-query_batch_size = 40
-reduced_sample_size = 4
-used_size = 90
+query_batch_size = 15
+reduced_sample_size = 2
+used_size = 75
 
 
-parser = argparse.ArgumentParser(description='MNIST noise active learning')
+parser = argparse.ArgumentParser(
+    description='UCI mushrooms noise active learning')
 
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
+parser.add_argument('--no-active', action='store_true', default=False,
+                    help='disables active learning')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -67,10 +70,10 @@ train_data = torch.from_numpy(X_train.values).float()
 # std = torch.std(train_data, 1, keepdim=True)
 # train_data = (train_data-m)/std
 train_labels = torch.from_numpy(y_train.values).unsqueeze(1).float()
+train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
 
 unlabeled_set, labeled_set = dataset.datasets_initialization(
-    train_data, train_labels, init_size,
-    init_weight, pho_p=pho_p, pho_n=pho_n)
+    train_data, train_labels, init_size, init_weight)
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
 
@@ -126,17 +129,16 @@ for incr in range(incr_times+1):
 
     print('\nincr {}'.format(incr))
 
-    '''
-    print('\nActive Query'.format(incr))
-    for i, cls in enumerate(clss):
-        print('classifier {}'.format(i))
-        cls.train(labeled_set, test_set, batch_size,
-                  retrain_epochs, convex_epochs, used_size, test_on_train)
-    drawn_number = IWALQuery.query(
-        unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
-    used_size += drawn_number - reduced_sample_size
-    majority_vote(clss, test_set)
-    '''
+    if not args.no_active:
+        print('\nActive Query'.format(incr))
+        for i, cls in enumerate(clss):
+            print('classifier {}'.format(i))
+            cls.train(labeled_set, test_set, batch_size,
+                      retrain_epochs, convex_epochs, used_size, test_on_train)
+        selected = IWALQuery.query(
+            unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
+        used_size += len(selected[0]) - reduced_sample_size
+        majority_vote(clss, test_set)
 
     print('\nRandom Query'.format(incr))
     for i, cls in enumerate(clss_rand):
@@ -146,4 +148,24 @@ for incr in range(incr_times+1):
             retrain_epochs, convex_epochs, test_on_train=test_on_train)
     RandomQuery().query(
         unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
-    majority_vote(clss_rand, test_set)
+    if num_clss > 1:
+        majority_vote(clss_rand, test_set)
+
+
+if incr_times > 0:
+
+    print('\n\nTrain new classifier on selected points')
+
+    cls = create_new_classifier()
+    cls_rand = deepcopy(cls)
+
+    if not args.no_active:
+        print('\nActively Selected Points')
+        cls.train(
+            labeled_set, test_set, batch_size,
+            retrain_epochs*2, convex_epochs, test_on_train=test_on_train)
+
+    print('\nRandomly Selected Points')
+    cls_rand.train(
+        labeled_set_rand, test_set, batch_size,
+        retrain_epochs*2, convex_epochs, test_on_train=test_on_train)

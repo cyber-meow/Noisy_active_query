@@ -17,7 +17,9 @@ am_performance = []
 r_performance = []
 ra_performance = []
 rm_performance = []
+
 active = True
+xs_a = [init_size]
 
 
 content = [line for line in content
@@ -59,6 +61,9 @@ for i, line in enumerate(content):
             ra_performance[-1] += per
             n_clss += 1
 
+    if line.startswith('[torch'):
+        xs_a.append(xs_a[-1]+int(line[27:-4]))
+
 print(a_performance)
 print(r_performance)
 
@@ -67,11 +72,12 @@ ra_performance = [per/n_clss for per in ra_performance]
 
 xs = np.arange(
     init_size, init_size+query_batch_size*incr_times+1, query_batch_size)
+xs_a = xs_a[:-1]
 
-plt.plot(xs, a_performance, label='active best')
-plt.plot(xs, aa_performance, label='active average')
+plt.plot(xs_a, a_performance, label='active best')
+plt.plot(xs_a, aa_performance, label='active average')
 if am_performance != []:
-    plt.plot(xs, am_performance, label='active majority')
+    plt.plot(xs_a, am_performance, label='active majority')
 plt.plot(xs, r_performance, label='random best')
 plt.plot(xs, ra_performance, label='random average')
 if rm_performance != []:
