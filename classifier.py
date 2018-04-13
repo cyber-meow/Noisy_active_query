@@ -11,9 +11,10 @@ import settings
 
 class Classifier(object):
 
-    def __init__(self, model, pho_p=0, pho_n=0, lr=5e-3):
+    def __init__(self, model, pho_p=0, pho_n=0, lr=5e-3, weight_decay=1e-2):
         self.model = model
         self.lr = lr
+        self.weight_decay = weight_decay
         self.pho_p = pho_p
         self.pho_n = pho_n
         self.threshold = 1
@@ -24,7 +25,8 @@ class Classifier(object):
 
     def init_optimizer(self):
         self.optimizer = optim.Adam(
-            self.model.parameters(), lr=self.lr, weight_decay=1e-2)
+            self.model.parameters(),
+            lr=self.lr, weight_decay=self.weight_decay)
 
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
@@ -32,7 +34,7 @@ class Classifier(object):
               test_interval=1, test_on_train=False):
 
         self.model.train()
-        # self.init_optimizer()
+        self.init_optimizer()
 
         if used_size is None:
             train_loader = data.DataLoader(

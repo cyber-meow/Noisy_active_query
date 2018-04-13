@@ -3,11 +3,11 @@ import sys
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.autograd import Variable
 from sklearn import datasets
+from collections import OrderedDict
 
 import dataset
 from active_query import IWALQuery
@@ -36,12 +36,43 @@ init_size = 90
 kcenter = True
 
 used_size = 80
-incr_times = 8
+incr_times = 2
 query_batch_size = 6
 reduced_sample_size = 1
 
 init_weight = 1
 weight_ratio = 2
+
+load = False
+save = False
+
+params = OrderedDict([
+    ('moons', moons),
+    ('kcenter', kcenter),
+    ('\nn_positive', n_positive),
+    ('n_negative', n_negative),
+    ('\npho_p', pho_p),
+    ('pho_n', pho_n),
+    ('\nlearning_rate', learning_rate),
+    ('weight_decay', weight_decay),
+    ('\nconvex_epochs', convex_epochs),
+    ('retrain_epochs', retrain_epochs),
+    ('final_epochs', final_epochs),
+    ('\nnum_clss', num_clss),
+    ('init_size', init_size),
+    ('used_size', used_size),
+    ('incr_times', incr_times),
+    ('query_batch_size', query_batch_size),
+    ('reduced_sample_size', reduced_sample_size),
+    ('\ninit_weight', init_weight),
+    ('weight_ratio', weight_ratio),
+    ('\nload', load),
+    ('save', save),
+])
+
+for key, value in params.items():
+    print('{}: {}'.format(key, value))
+print('')
 
 
 class Net(nn.Module):
@@ -75,11 +106,6 @@ conts_dy = []
 
 
 class ToyClassifier(Classifier):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.optimizer = optim.Adam(
-            self.model.parameters(), lr=self.lr, weight_decay=weight_decay)
 
     def train(self, labeled_set, test_set, retrain_epochs,
               convex_epochs=None, used_size=None,
@@ -159,11 +185,12 @@ def create_new_classifier():
             model,
             pho_p=pho_p_c,
             pho_n=pho_n_c,
-            lr=learning_rate)
+            lr=learning_rate,
+            weight_decay=weight_decay)
     return cls
 
 
-if os.path.exists('datasets/toy/train_data.npy') and False:
+if os.path.exists('datasets/toy/train_data.npy') and load:
     x_all = np.load('datasets/toy/train_data.npy')
     y_all_corrupted = np.load('datasets/toy/train_labels.npy')
 
@@ -176,8 +203,9 @@ else:
 
     y_all_corrupted = dataset.label_corruption(y_all, pho_p, pho_n)
 
-    np.save('datasets/toy/train_data', x_all)
-    np.save('datasets/toy/train_labels', y_all_corrupted)
+    if save:
+        np.save('datasets/toy/train_data', x_all)
+        np.save('datasets/toy/train_labels', y_all_corrupted)
 
 if kcenter:
     unlabeled_set, labeled_set = dataset.datasets_initialization_kcenter(
@@ -187,7 +215,7 @@ else:
         x_all, y_all_corrupted, init_size, init_weight)
 
 
-if os.path.exists('datasets/toy/test_data.npy') and False:
+if os.path.exists('datasets/toy/test_data.npy') and load:
     x_test = np.load('datasets/toy/test_data.npy')
     y_test = np.load('datasets/toy/test_labels.npy')
 else:
@@ -196,8 +224,9 @@ else:
     else:
         x_test, y_test = datasets.make_circles(n, noise=0.03)
     y_test = (y_test*2-1).reshape(-1, 1)
-    np.save('datasets/toy/test_data', x_test)
-    np.save('datasets/toy/test_labels', y_test)
+    if save:
+        np.save('datasets/toy/test_data', x_test)
+        np.save('datasets/toy/test_labels', y_test)
 
 test_set = torch.utils.data.TensorDataset(
     torch.from_numpy(x_test).float(), torch.from_numpy(y_test).float())
@@ -239,7 +268,7 @@ for incr in range(incr_times+1):
     print('\nincr {}'.format(incr))
 
     for i, cls in enumerate(clss):
-        print('classifier {}'.format(i))
+        print('\nclassifier {}'.format(i))
         cls.train(labeled_set, test_set, retrain_epochs,
                   convex_epochs, used_size,
                   test_interval=3000, test_on_train=True)
@@ -249,6 +278,7 @@ for incr in range(incr_times+1):
             del conts[0]
         conts.append(cls.model.plot_boundary(ax, colors=[cm(i/num_clss)]))
         plt.pause(0.05)
+    print('')
     if num_clss > 1:
         majority_vote(clss, test_set)
 
@@ -268,6 +298,7 @@ for incr in range(incr_times+1):
 
 
 if incr_times > 0:
+    print('\n')
     cls = create_new_classifier()
     cls.train(labeled_set, test_set, final_epochs, convex_epochs,
               test_interval=3000)

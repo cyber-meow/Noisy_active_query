@@ -74,7 +74,6 @@ def datasets_initialization(data, labels, init_size, init_weight):
 
 def datasets_initialization_kcenter(
         data, labels, init_size, init_weight, pho_p=0, pho_n=0):
-    print('kcenter initialization')
     if torch.is_tensor(data):
         data = data.numpy()
     if torch.is_tensor(labels):

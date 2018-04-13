@@ -6,10 +6,11 @@ import torchvision
 import torchvision.transforms as transforms
 
 import argparse
-from copy import deepcopy
 # import matplotlib.pyplot as plt
 import numpy as np
 # from sklearn.decomposition import PCA
+from copy import deepcopy
+from collections import OrderedDict
 
 import dataset
 import settings
@@ -22,7 +23,7 @@ pho_n = 0
 
 batch_size = 40
 learning_rate = 5e-4
-# weight_decay = 1e-2
+weight_decay = 1e-2
 
 convex_epochs = 10
 retrain_epochs = 120
@@ -39,7 +40,34 @@ reduced_sample_size = 4
 init_weight = 1
 weight_ratio = 2
 
+use_CNN = False
+kcenter = False
+
 n_pca_components = 784
+
+params = OrderedDict([
+    ('kcenter', kcenter),
+    ('use_CNN', use_CNN),
+    ('\npho_p', pho_p),
+    ('pho_n', pho_n),
+    ('\nbatch_size', batch_size),
+    ('learning_rate', learning_rate),
+    ('weight_decay', weight_decay),
+    ('\nconvex_epochs', convex_epochs),
+    ('retrain_epochs', retrain_epochs),
+    ('\nnum_clss', num_clss),
+    ('init_size', init_size),
+    ('used_size', used_size),
+    ('incr_times', incr_times),
+    ('query_batch_size', query_batch_size),
+    ('reduced_sample_size', reduced_sample_size),
+    ('\ninit_weight', init_weight),
+    ('weight_ratio', weight_ratio),
+])
+
+for key, value in params.items():
+    print('{}: {}'.format(key, value))
+print('')
 
 
 parser = argparse.ArgumentParser(description='MNIST noise active learning')
@@ -87,8 +115,11 @@ train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
 train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
 
-# unlabeled_set, labeled_set = dataset.datasets_initialization_kcenter(
-unlabeled_set, labeled_set = dataset.datasets_initialization(
+data_init = (dataset.datasets_initialization_kcenter
+             if kcenter
+             else dataset.datasets_initialization)
+
+unlabeled_set, labeled_set = data_init(
     train_data, train_labels, init_size, init_weight)
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
@@ -141,13 +172,16 @@ class Linear(nn.Module):
 
 
 def create_new_classifier():
-    # model = Net().cuda() if args.cuda else Net()
-    model = Linear().cuda() if args.cuda else Linear()
+    if use_CNN:
+        model = Net().cuda() if args.cuda else Net()
+    else:
+        model = Linear().cuda() if args.cuda else Linear()
     cls = Classifier(
             model,
             pho_p=pho_p,
             pho_n=pho_n,
-            lr=learning_rate)
+            lr=learning_rate,
+            weight_decay=weight_decay)
     return cls
 
 
@@ -163,7 +197,7 @@ for incr in range(incr_times+1):
     if not args.no_active:
         print('\nActive Query'.format(incr))
         for i, cls in enumerate(clss):
-            print('classifier {}'.format(i))
+            print('\nclassifier {}'.format(i))
             cls.train(labeled_set, test_set, batch_size,
                       retrain_epochs, convex_epochs, used_size, test_on_train)
         selected = IWALQuery.query(
@@ -173,7 +207,7 @@ for incr in range(incr_times+1):
 
     print('\nRandom Query'.format(incr))
     for i, cls in enumerate(clss_rand):
-        print('classifier {}'.format(i))
+        print('\nclassifier {}'.format(i))
         cls.train(
             labeled_set_rand, test_set, batch_size,
             retrain_epochs, convex_epochs, test_on_train=test_on_train)

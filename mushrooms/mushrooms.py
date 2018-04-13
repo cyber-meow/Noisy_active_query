@@ -6,6 +6,7 @@ import argparse
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from copy import deepcopy
+from collections import OrderedDict
 
 import dataset
 import settings
@@ -13,24 +14,52 @@ from active_query import RandomQuery, IWALQuery
 from classifier import Classifier, majority_vote
 
 
-init_weight = 1
-weight_ratio = 2
-init_size = 200
-
 pho_p = 0.1
 pho_n = 0.1
 
 batch_size = 50
-num_clss = 5
 learning_rate = 5e-3
-incr_times = 8
+weight_decay = 1e-2
+
+convex_epochs = 10
+retrain_epochs = 120
 test_on_train = False
 
-retrain_epochs = 120
-convex_epochs = 10
+num_clss = 5
+init_size = 80
+
+used_size = 75
+incr_times = 8
 query_batch_size = 15
 reduced_sample_size = 2
-used_size = 75
+
+init_weight = 1
+weight_ratio = 2
+
+kcenter = False
+
+params = OrderedDict([
+    ('kcenter', kcenter),
+    ('\npho_p', pho_p),
+    ('pho_n', pho_n),
+    ('\nbatch_size', batch_size),
+    ('learning_rate', learning_rate),
+    ('weight_decay', weight_decay),
+    ('\nconvex_epochs', convex_epochs),
+    ('retrain_epochs', retrain_epochs),
+    ('\nnum_clss', num_clss),
+    ('init_size', init_size),
+    ('used_size', used_size),
+    ('incr_times', incr_times),
+    ('query_batch_size', query_batch_size),
+    ('reduced_sample_size', reduced_sample_size),
+    ('\ninit_weight', init_weight),
+    ('weight_ratio', weight_ratio),
+])
+
+for key, value in params.items():
+    print('{}: {}'.format(key, value))
+print('')
 
 
 parser = argparse.ArgumentParser(
@@ -72,7 +101,11 @@ train_data = torch.from_numpy(X_train.values).float()
 train_labels = torch.from_numpy(y_train.values).unsqueeze(1).float()
 train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
 
-unlabeled_set, labeled_set = dataset.datasets_initialization(
+data_init = (dataset.datasets_initialization_kcenter
+             if kcenter
+             else dataset.datasets_initialization)
+
+unlabeled_set, labeled_set = data_init(
     train_data, train_labels, init_size, init_weight)
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
@@ -132,9 +165,10 @@ for incr in range(incr_times+1):
     if not args.no_active:
         print('\nActive Query'.format(incr))
         for i, cls in enumerate(clss):
-            print('classifier {}'.format(i))
+            print('\nclassifier {}'.format(i))
             cls.train(labeled_set, test_set, batch_size,
-                      retrain_epochs, convex_epochs, used_size, test_on_train)
+                      retrain_epochs, convex_epochs, used_size,
+                      test_on_train=test_on_train)
         selected = IWALQuery.query(
             unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
         used_size += len(selected[0]) - reduced_sample_size
@@ -142,7 +176,7 @@ for incr in range(incr_times+1):
 
     print('\nRandom Query'.format(incr))
     for i, cls in enumerate(clss_rand):
-        print('classifier {}'.format(i))
+        print('\nclassifier {}'.format(i))
         cls.train(
             labeled_set_rand, test_set, batch_size,
             retrain_epochs, convex_epochs, test_on_train=test_on_train)
