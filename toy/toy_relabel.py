@@ -23,7 +23,7 @@ pho_n_c = pho_n
 learning_rate = 5e-3
 weight_decay = 1e-3
 
-convex_epochs = 1000
+convex_epochs = 500
 retrain_epochs = 12000
 
 init_weight = 1
@@ -169,7 +169,7 @@ for corr in range(corr_times):
     print('\ncorrection {}'.format(corr))
 
     cls.train(labeled_set, test_set, retrain_epochs,
-              convex_epochs, test_interval=3000, test_on_train=True)
+              convex_epochs, test_interval=10, test_on_train=True)
     if corr >= 1:
         cont.collections[0].set_linewidth(1)
         cont.collections[0].set_alpha(0.3)
@@ -233,6 +233,12 @@ for corr in range(corr_times):
     while not plt.waitforbuttonpress(1):
         pass
 
+plt.figure()
+plt.plot(cls.train_accuracies, label='train accuracy')
+plt.plot(cls.test_accuracies, label='test accuracy')
+plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
+plt.plot(cls.critic_confs, label='critic conf')
+plt.legend()
 
 while not plt.waitforbuttonpress(1):
     pass

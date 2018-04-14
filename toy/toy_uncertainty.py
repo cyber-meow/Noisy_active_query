@@ -23,7 +23,7 @@ pho_n_c = pho_n
 learning_rate = 5e-3
 weight_decay = 1e-3
 
-convex_epochs = 1000
+convex_epochs = 500
 retrain_epochs = 12000
 
 init_weight = 1
@@ -127,8 +127,8 @@ for incr in range(incr_times+1):
 
     print('\nincr {}'.format(incr))
 
-    cls.train(labeled_set, test_set, retrain_epochs,
-              convex_epochs, test_interval=3000, test_on_train=True)
+    cls.train(labeled_set, test_set, retrain_epochs, convex_epochs,
+              test_interval=10, print_interval=3000, test_on_train=True)
     if incr >= 1:
         cont.collections[0].set_linewidth(1)
         cont.collections[0].set_alpha(0.3)

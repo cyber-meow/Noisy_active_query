@@ -17,29 +17,29 @@ from classifier import Classifier, majority_vote
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.4
+pho_p = 0.5
 pho_n = 0
 
 batch_size = 40
-learning_rate = 5e-4
+learning_rate = 1e-3
 weight_decay = 1e-2
 
 convex_epochs = 10
-retrain_epochs = 120
+retrain_epochs = 60
 test_on_train = False
 
 num_clss = 1
-init_size = 2600
+init_size = 100
 
-used_size = 550
-incr_times = 0
-query_batch_size = 40
-reduced_sample_size = 4
+used_size = 90
+incr_times = 10
+query_batch_size = 20
+reduced_sample_size = 2
 
 init_weight = 1
 weight_ratio = 2
 
-use_CNN = False
+use_CNN = True
 kcenter = False
 
 params = OrderedDict([

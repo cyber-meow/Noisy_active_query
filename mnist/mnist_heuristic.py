@@ -18,21 +18,21 @@ from classifier import Classifier
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.4
-pho_n = 0.1
+pho_p = 0.5
+pho_n = 0
 
 batch_size = 40
-learning_rate = 5e-4
+learning_rate = 1e-3
 weight_decay = 1e-2
 
-convex_epochs = 10
+convex_epochs = 5
 retrain_epochs = 100
 test_on_train = True
 
 num_clss = 1
 init_size = 500
 
-used_size = 200
+used_size = 100
 incr_times = 0
 query_batch_size = 40
 reduced_sample_size = 4
@@ -202,6 +202,6 @@ plt.figure()
 plt.plot(cls.train_accuracies, label='train accuracy')
 plt.plot(cls.test_accuracies, label='test accuracy')
 plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
-plt.plot(cls.critic_losses, label='critic loss')
+plt.plot(cls.critic_confs, label='critic conf')
 plt.legend()
 plt.show()

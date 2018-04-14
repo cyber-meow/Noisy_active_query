@@ -6,6 +6,8 @@ import torch.utils.data as data
 import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
+
+from copy import deepcopy
 import settings
 
 
@@ -19,10 +21,12 @@ class Classifier(object):
         self.pho_n = pho_n
         self.threshold = 1
         self.init_optimizer()
+        self.smallest_conf = 0
+        self.critic_model = None
         self.test_accuracies = []
         self.train_accuracies = []
         self.high_loss_fractions = []
-        self.critic_losses = []
+        self.critic_confs = []
 
     def init_optimizer(self):
         self.optimizer = optim.Adam(
@@ -32,7 +36,7 @@ class Classifier(object):
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
               convex_epochs=None, used_size=None,
-              test_interval=1, test_on_train=False):
+              test_interval=1, print_interval=1, test_on_train=False):
 
         self.init_optimizer()
 
@@ -50,15 +54,8 @@ class Classifier(object):
 
         for epoch in range(retrain_epochs):
 
-            # output = self.model(
-            #     Variable(labeled_set.data_tensor).type(settings.dtype))
-            # fxs = (output.data.cpu()
-            #        * labeled_set.target_tensor).numpy().reshape(-1)
-            # negative_fxs = fxs[fxs <= 0]
-            # tmp = (1 - np.array(negative_fxs))/2
-            # self.threshold = np.percentile(tmp, 30).item()
-            # print(self.threshold)
-            # print(np.median(tmp))
+            if epoch == convex_epochs:
+                self.smallest_conf = 100
 
             if convex_epochs is not None and epoch >= convex_epochs:
                 if (self.test_accuracies != []
@@ -72,11 +69,20 @@ class Classifier(object):
                 self.train_step(train_loader, epoch)
 
             if (epoch+1) % test_interval == 0 or epoch+1 == retrain_epochs:
-                sys.stdout.write('Epoch: {}  '.format(epoch))
+                to_print = (epoch+1) % print_interval == 0
+                if to_print:
+                    sys.stdout.write('Epoch: {}  '.format(epoch))
                 if test_on_train:
-                    self.test(labeled_set, 'Train')
-                self.test(test_set, 'Test')
+                    self.test(labeled_set, 'Train', to_print)
+                self.test(test_set, 'Test', to_print)
                 self.find_high_loss_samples(labeled_set)
+
+        self.model = self.critic_model
+        if test_on_train:
+            self.test(labeled_set, 'Train')
+            self.train_accuracies.pop()
+        self.test(test_set, 'Test')
+        self.test_accuracies.pop()
 
     def train_step(self, train_loader, epoch, convex_loss=True):
         self.model.train()
@@ -103,7 +109,6 @@ class Classifier(object):
         else:
             sigmoid = nn.Sigmoid()
             return sigmoid(-fx)
-            # return torch.clamp((1-fx)/2, 0, self.threshold)
 
     def compute_loss(self, output, target, convex_loss=True, w=None):
         a = (self.pho_p - self.pho_n)/2
@@ -127,12 +132,15 @@ class Classifier(object):
         prob = self.basic_loss(-output*target, False).data.numpy().reshape(-1)
         high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
         small_conf_number = int(len(prob)*(self.pho_p+self.pho_n)/2)
-        critic_loss = np.mean(np.sort(prob)[:small_conf_number])*100
-        self.critic_losses.append(critic_loss)
+        critic_conf = np.mean(np.sort(prob)[:small_conf_number])*100
+        if critic_conf < self.smallest_conf:
+            self.smallest_conf = critic_conf
+            self.critic_model = deepcopy(self.model)
+        self.critic_confs.append(critic_conf)
         self.high_loss_fractions.append(high_loss_fraction)
-        print('High loss samples: {} %'.format(high_loss_fraction))
+        # print('High loss samples: {} %'.format(high_loss_fraction))
 
-    def test(self, test_set, set_name):
+    def test(self, test_set, set_name, to_print=True):
         self.model.eval()
         x = Variable(test_set.data_tensor).type(settings.dtype)
         target = Variable(test_set.target_tensor).type(settings.dtype)
@@ -144,8 +152,9 @@ class Classifier(object):
             self.test_accuracies.append(accuracy)
         if set_name == 'Train':
             self.train_accuracies.append(accuracy)
-        print('{} set: Accuracy: {}/{} ({:.2f}%)'.format(
-              set_name, correct, len(test_set), accuracy))
+        if to_print:
+            print('{} set: Accuracy: {}/{} ({:.2f}%)'.format(
+                set_name, correct, len(test_set), accuracy))
 
 
 def majority_vote(clss, test_set):
