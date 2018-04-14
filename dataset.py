@@ -84,10 +84,10 @@ def datasets_initialization_kcenter(
         #     print(i)
         kcenter.select_one()
     unlabeled_set = torch.utils.data.TensorDataset(
-        torch.from_numpy(kcenter.pool),
-        torch.from_numpy(kcenter.pool_y))
+        torch.from_numpy(kcenter.pool).float(),
+        torch.from_numpy(kcenter.pool_y).float())
     labeled_set = WeightedTensorDataset(
-        torch.from_numpy(kcenter.selected),
-        torch.from_numpy(kcenter.selected_y),
+        torch.from_numpy(kcenter.selected).float(),
+        torch.from_numpy(kcenter.selected_y).float(),
         init_weight * torch.ones(init_size, 1))
     return unlabeled_set, labeled_set

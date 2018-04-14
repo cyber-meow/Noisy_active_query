@@ -1,38 +1,38 @@
 import torch
 import torch.nn as nn
 import torch.utils.data as data
-import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
+from torch.autograd import Variable
 
 import argparse
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import numpy as np
 # from sklearn.decomposition import PCA
-from copy import deepcopy
 from collections import OrderedDict
+from scipy.spatial import distance
 
 import dataset
 import settings
-from active_query import RandomQuery, IWALQuery
-from classifier import Classifier, majority_vote
+from classifier import Classifier
+from mnist.basics import Net, Linear
 
 
 pho_p = 0.4
-pho_n = 0
+pho_n = 0.1
 
 batch_size = 40
 learning_rate = 5e-4
 weight_decay = 1e-2
 
 convex_epochs = 10
-retrain_epochs = 120
-test_on_train = False
+retrain_epochs = 100
+test_on_train = True
 
 num_clss = 1
-init_size = 2600
+init_size = 500
 
-used_size = 550
+used_size = 200
 incr_times = 0
 query_batch_size = 40
 reduced_sample_size = 4
@@ -40,7 +40,7 @@ reduced_sample_size = 4
 init_weight = 1
 weight_ratio = 2
 
-use_CNN = False
+use_CNN = True
 kcenter = False
 
 n_pca_components = 784
@@ -105,15 +105,15 @@ train_labels = (train_labels-3)/2.5-1
 # used_idxs = np.logical_or(train_labels == 7, train_labels == 9)
 # train_labels = train_labels-8
 
-# pca = PCA(n_components=n_pca_components)
-# train_data = pca.fit_transform(train_data.reshape(-1, 784))
-
 train_data = train_data[used_idxs]
 train_labels = train_labels[used_idxs]
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
-train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
-train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
+train_labels_clean = torch.from_numpy(train_labels).unsqueeze(1).float()
+train_labels_corrupted = dataset.label_corruption(
+    train_labels_clean, pho_p, pho_n)
+train_labels = torch.cat(
+    [train_labels_corrupted, train_labels_clean], dim=1)
 
 data_init = (dataset.datasets_initialization_kcenter
              if kcenter
@@ -121,8 +121,8 @@ data_init = (dataset.datasets_initialization_kcenter
 
 unlabeled_set, labeled_set = data_init(
     train_data, train_labels, init_size, init_weight)
-unlabeled_set_rand = deepcopy(unlabeled_set)
-labeled_set_rand = deepcopy(labeled_set)
+train_labels = labeled_set.target_tensor.numpy()
+labeled_set.target_tensor = torch.from_numpy(train_labels[:, 0, None])
 
 
 test_data = mnist_test.test_data.numpy()
@@ -139,36 +139,21 @@ test_set = data.TensorDataset(
     torch.from_numpy(test_labels[used_idxs]).unsqueeze(1).float())
 
 
-class Net(nn.Module):
-
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 3, 5, 1)
-        self.conv2 = nn.Conv2d(3, 6, 5, 1)
-        self.fc1 = nn.Linear(4*4*6, 20)
-        self.fc2 = nn.Linear(20, 1)
-
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(-1, 4*4*6)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return x
-
-
-class Linear(nn.Module):
-
-    def __init__(self):
-        super(Linear, self).__init__()
-        self.linear = nn.Linear(n_pca_components, 1)
-
-    def forward(self, x):
-        y_pred = self.linear(x.view(-1, n_pca_components))
-        return y_pred
+def confidence_scores(data, labels):
+    p_d = distance.squareform(distance.pdist(data))
+    sigma = np.mean(np.sort(p_d, axis=1)[:, :5])
+    K = np.exp(-p_d**2/sigma**2)
+    labels = labels.reshape(-1)
+    a = (pho_p - pho_n)/2
+    b = (pho_p + pho_n)/2
+    pho_y = a * labels + b
+    pho_ny = pho_p + pho_n - pho_y
+    weights = 1 - pho_ny + pho_y
+    score = np.sum(K * weights * labels, axis=1) * labels
+    score = 2*score/np.std(score)
+    conf = 1/(1+np.exp(-score))
+    # class_conf = (1-pho_y)/(1-pho_y+pho_ny)
+    return conf  # * class_conf
 
 
 def create_new_classifier():
@@ -185,52 +170,38 @@ def create_new_classifier():
     return cls
 
 
-clss = [create_new_classifier() for _ in range(num_clss)]
-clss_rand = [deepcopy(cls) for cls in clss]
-IWALQuery = IWALQuery()
+cls = create_new_classifier()
+cls.train(labeled_set, test_set, batch_size,
+          retrain_epochs, convex_epochs,
+          test_on_train=test_on_train)
+out = cls.model(Variable(labeled_set.data_tensor).type(settings.dtype))
+sigmoid = nn.Sigmoid()
+cls_conf = sigmoid(
+            out*Variable(labeled_set.target_tensor).type(settings.dtype)
+            ).data.numpy().reshape(-1)
 
 
-for incr in range(incr_times+1):
+conf = confidence_scores(
+    labeled_set.data_tensor.numpy().reshape(-1, 784),
+    train_labels[:, 0, None])
+print(train_labels[:, 0][conf < 0.5])
+print(np.sum(conf < 0.5))
 
-    print('\nincr {}'.format(incr))
+# grid_img = torchvision.utils.make_grid(
+#     labeled_set.data_tensor[torch.from_numpy(np.argsort(conf)[:10])])
+# plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
 
-    if not args.no_active:
-        print('\nActive Query'.format(incr))
-        for i, cls in enumerate(clss):
-            print('\nclassifier {}'.format(i))
-            cls.train(labeled_set, test_set, batch_size,
-                      retrain_epochs, convex_epochs, used_size, test_on_train)
-        selected = IWALQuery.query(
-            unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
-        used_size += len(selected[0]) - reduced_sample_size
-        majority_vote(clss, test_set)
+diff = (train_labels[:, 0] != train_labels[:, 1]).reshape(-1)
+plt.plot(diff[np.argsort(conf)], label='conf hit')
+plt.plot(diff[np.argsort(cls_conf)], '--', label='cls conf hit', alpha=0.6)
+plt.plot(np.sort(conf), label='conf')
+plt.plot(np.sort(cls_conf), label='cls conf')
+plt.legend()
 
-    print('\nRandom Query'.format(incr))
-    for i, cls in enumerate(clss_rand):
-        print('\nclassifier {}'.format(i))
-        cls.train(
-            labeled_set_rand, test_set, batch_size,
-            retrain_epochs, convex_epochs, test_on_train=test_on_train)
-    RandomQuery().query(
-        unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
-    if num_clss > 1:
-        majority_vote(clss_rand, test_set)
-
-
-if incr_times > 0:
-
-    print('\n\nTrain new classifier on selected points')
-
-    cls = create_new_classifier()
-    cls_rand = deepcopy(cls)
-
-    if not args.no_active:
-        print('\nActively Selected Points')
-        cls.train(
-            labeled_set, test_set, batch_size,
-            retrain_epochs*2, convex_epochs, test_on_train=test_on_train)
-
-    print('\nRandomly Selected Points')
-    cls_rand.train(
-        labeled_set_rand, test_set, batch_size,
-        retrain_epochs*2, convex_epochs, test_on_train=test_on_train)
+plt.figure()
+plt.plot(cls.train_accuracies, label='train accuracy')
+plt.plot(cls.test_accuracies, label='test accuracy')
+plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
+plt.plot(cls.critic_losses, label='critic loss')
+plt.legend()
+plt.show()

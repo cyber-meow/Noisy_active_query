@@ -18,10 +18,11 @@ class Classifier(object):
         self.pho_p = pho_p
         self.pho_n = pho_n
         self.threshold = 1
-        self.best_accuracy = 0
-        self.use_logistic_threshold = 75
-        self.last_accuracy = 50
         self.init_optimizer()
+        self.test_accuracies = []
+        self.train_accuracies = []
+        self.high_loss_fractions = []
+        self.critic_losses = []
 
     def init_optimizer(self):
         self.optimizer = optim.Adam(
@@ -33,7 +34,6 @@ class Classifier(object):
               convex_epochs=None, used_size=None,
               test_interval=1, test_on_train=False):
 
-        self.model.train()
         self.init_optimizer()
 
         if used_size is None:
@@ -61,7 +61,8 @@ class Classifier(object):
             # print(np.median(tmp))
 
             if convex_epochs is not None and epoch >= convex_epochs:
-                if self.last_accuracy < 75:  # self.use_logistic_threshold:
+                if (self.test_accuracies != []
+                        and self.test_accuracies[-1] < 75):
                     print('Use logistic exceptionally')
                     self.train_step(train_loader, epoch)
                     # self.train_step(train_loader, epoch, convex_loss=False)
@@ -75,8 +76,10 @@ class Classifier(object):
                 if test_on_train:
                     self.test(labeled_set, 'Train')
                 self.test(test_set, 'Test')
+                self.find_high_loss_samples(labeled_set)
 
     def train_step(self, train_loader, epoch, convex_loss=True):
+        self.model.train()
         total_loss = 0
         for batch_idx, (x, target, w) in enumerate(train_loader):
             self.optimizer.zero_grad()
@@ -108,12 +111,26 @@ class Classifier(object):
         pho_y = a * target + b
         pho_ny = self.pho_p + self.pho_n - pho_y
         loss = self.basic_loss(target*output, convex_loss)
+        # loss_ny = self.basic_loss(-targets*outputs, convex_loss)
         loss = (1-pho_ny+pho_y) * loss
         if w is not None:
             assert w.shape == loss.shape
             loss *= w
         total_loss = torch.sum(loss)
         return loss, total_loss
+
+    def find_high_loss_samples(self, labeled_set):
+        self.model.eval()
+        x = Variable(labeled_set.data_tensor).type(settings.dtype)
+        target = Variable(labeled_set.target_tensor).type(settings.dtype)
+        output = self.model(x)
+        prob = self.basic_loss(-output*target, False).data.numpy().reshape(-1)
+        high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
+        small_conf_number = int(len(prob)*(self.pho_p+self.pho_n)/2)
+        critic_loss = np.mean(np.sort(prob)[:small_conf_number])*100
+        self.critic_losses.append(critic_loss)
+        self.high_loss_fractions.append(high_loss_fraction)
+        print('High loss samples: {} %'.format(high_loss_fraction))
 
     def test(self, test_set, set_name):
         self.model.eval()
@@ -122,14 +139,13 @@ class Classifier(object):
         output = self.model(x)
         pred = torch.sign(output)
         correct = torch.sum(pred.eq(target).float()).data[0]
-        self.last_accuracy = 100 * correct / len(test_set)
-        self.best_accuracy = max(self.best_accuracy, self.last_accuracy)
-        self.use_logistic_threshold = max(
-            self.use_logistic_threshold, self.best_accuracy-5)
-        print(
-            '{} set: Accuracy: {}/{} ({:.2f}%)'.format(
-                set_name, correct, len(test_set),
-                self.last_accuracy))
+        accuracy = 100 * correct/len(test_set)
+        if set_name == 'Test':
+            self.test_accuracies.append(accuracy)
+        if set_name == 'Train':
+            self.train_accuracies.append(accuracy)
+        print('{} set: Accuracy: {}/{} ({:.2f}%)'.format(
+              set_name, correct, len(test_set), accuracy))
 
 
 def majority_vote(clss, test_set):

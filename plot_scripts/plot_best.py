@@ -4,10 +4,20 @@ import matplotlib.pyplot as plt
 
 
 with open(sys.argv[1]) as f:
-    init_size = int(f.readline())
-    f.readline()
-    query_batch_size = int(f.readline())
-    incr_times = int(f.readline())
+    for line in f:
+        param = line.split(':')
+        if param[0] == 'retrain_epochs':
+            retrain_epochs = int(param[1])
+        if param[0] == 'init_size':
+            init_size = int(param[1])
+        if param[0] == 'query_batch_size':
+            query_batch_size = int(param[1])
+        if param[0] == 'incr_times':
+            incr_times = int(param[1])
+        if param[0] == 'num_clss':
+            num_clss = int(param[1])
+        if line == 'incr 0\n':
+            break
     content = f.readlines()
 
 
@@ -23,25 +33,20 @@ xs_a = [init_size]
 
 
 content = [line for line in content
-           if line != 'use logistic exceptionally\n']
+           if line != 'Use logistic exceptionally\n']
 
 
 for i, line in enumerate(content):
-
-    if line.startswith('epoch'):
-        epoch = int(line[6:-1])
 
     if line.startswith('Active Query'):
         active = True
         a_performance.append(0)
         aa_performance.append(0)
-        n_clss = 0
 
     if line.startswith('Random Query'):
         active = False
         r_performance.append(0)
         ra_performance.append(0)
-        n_clss = 0
 
     if line.startswith('Majority'):
         per = float(line[-8:-3])
@@ -51,15 +56,13 @@ for i, line in enumerate(content):
             rm_performance.append(per)
 
     if line.startswith('classifier'):
-        per = float(content[i+epoch][-8:-3])
+        per = float(content[i+retrain_epochs][-8:-3])
         if active:
             a_performance[-1] = max(a_performance[-1], per)
             aa_performance[-1] += per
-            n_clss += 1
         else:
             r_performance[-1] = max(r_performance[-1], per)
             ra_performance[-1] += per
-            n_clss += 1
 
     if line.startswith('[torch'):
         xs_a.append(xs_a[-1]+int(line[27:-4]))
@@ -67,8 +70,8 @@ for i, line in enumerate(content):
 print(a_performance)
 print(r_performance)
 
-aa_performance = [per/n_clss for per in aa_performance]
-ra_performance = [per/n_clss for per in ra_performance]
+aa_performance = [per/num_clss for per in aa_performance]
+ra_performance = [per/num_clss for per in ra_performance]
 
 xs = np.arange(
     init_size, init_size+query_batch_size*incr_times+1, query_batch_size)

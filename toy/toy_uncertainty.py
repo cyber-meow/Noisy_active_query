@@ -4,17 +4,15 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import datasets
-from collections import OrderedDict
 
 import dataset
-from active_query import IWALQuery
-from classifier import majority_vote
+from active_query import UncertaintyQuery
 from toy.basics import Net, ToyClassifier
 
 
 moons = True
-n_positive = 5000
-n_negative = 5000
+n_positive = 10000
+n_negative = 10000
 n = n_positive + n_negative
 
 pho_p = 0.5
@@ -25,55 +23,19 @@ pho_n_c = pho_n
 learning_rate = 5e-3
 weight_decay = 1e-3
 
-convex_epochs = 4000
-retrain_epochs = 16000
-final_epochs = 24000
+convex_epochs = 1000
+retrain_epochs = 12000
 
-num_clss = 2
+init_weight = 1
 init_size = 90
 kcenter = True
 
-used_size = 80
-incr_times = 2
 query_batch_size = 6
-reduced_sample_size = 1
-
-init_weight = 1
-weight_ratio = 2
+incr_times = 8
+incr_pool_size = 1500
 
 load = False
 save = False
-
-params = OrderedDict([
-    ('moons', moons),
-    ('kcenter', kcenter),
-    ('\nn_positive', n_positive),
-    ('n_negative', n_negative),
-    ('\npho_p', pho_p),
-    ('pho_n', pho_n),
-    ('\nlearning_rate', learning_rate),
-    ('weight_decay', weight_decay),
-    ('\nconvex_epochs', convex_epochs),
-    ('retrain_epochs', retrain_epochs),
-    ('final_epochs', final_epochs),
-    ('\nnum_clss', num_clss),
-    ('init_size', init_size),
-    ('used_size', used_size),
-    ('incr_times', incr_times),
-    ('query_batch_size', query_batch_size),
-    ('reduced_sample_size', reduced_sample_size),
-    ('\ninit_weight', init_weight),
-    ('weight_ratio', weight_ratio),
-    ('\nload', load),
-    ('save', save),
-])
-
-for key, value in params.items():
-    print('{}: {}'.format(key, value))
-print('')
-
-
-conts_dy = []
 
 
 def create_new_classifier():
@@ -89,6 +51,7 @@ def create_new_classifier():
 
 if os.path.exists('datasets/toy/train_data.npy') and load:
     x_all = np.load('datasets/toy/train_data.npy')
+    y_all = np.load('datasets/toy/train_labels_clean.npy')
     y_all_corrupted = np.load('datasets/toy/train_labels.npy')
 
 else:
@@ -102,6 +65,7 @@ else:
 
     if save:
         np.save('datasets/toy/train_data', x_all)
+        np.sqve('datasets/toy/train_labels_clean.npy', y_all)
         np.save('datasets/toy/train_labels', y_all_corrupted)
 
 if kcenter:
@@ -153,53 +117,35 @@ plt.scatter(cx, cy, s=3, c='black', alpha=0.2)
 plt.pause(0.05)
 
 
-conts = []
+cls = create_new_classifier()
 cm = plt.get_cmap('gist_rainbow')
 
-clss = [create_new_classifier() for _ in range(num_clss)]
-IWALQuery = IWALQuery()
+cont = None
 
 
 for incr in range(incr_times+1):
 
     print('\nincr {}'.format(incr))
 
-    for i, cls in enumerate(clss):
-        print('\nclassifier {}'.format(i))
-        cls.train(labeled_set, test_set, retrain_epochs,
-                  convex_epochs, used_size,
-                  test_interval=3000, test_on_train=True)
-        if incr >= 1:
-            for coll in conts[0].collections:
-                coll.remove()
-            del conts[0]
-        conts.append(cls.model.plot_boundary(ax, colors=[cm(i/num_clss)]))
-        plt.pause(0.05)
-    print('')
-    if num_clss > 1:
-        majority_vote(clss, test_set)
+    cls.train(labeled_set, test_set, retrain_epochs,
+              convex_epochs, test_interval=3000, test_on_train=True)
+    if incr >= 1:
+        cont.collections[0].set_linewidth(1)
+        cont.collections[0].set_alpha(0.3)
+    cont = cls.model.plot_boundary(ax, colors=[cm(incr/incr_times)])
+    plt.pause(0.05)
 
-    if incr < incr_times:
-        x_selected, y_selected, _ = IWALQuery.query(
-            unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
-        used_size += len(x_selected) - reduced_sample_size
+    x_selected, y_selected, _ = UncertaintyQuery().query(
+        unlabeled_set, labeled_set, query_batch_size, cls,
+        incr_pool_size, init_weight)
 
-        x_selected = x_selected.numpy()
-        y_selected = y_selected.numpy().reshape(-1)
-        sx, sy = x_selected.T
-        plt.scatter(sx, sy, s=10, label='{}'.format(incr))
-        sx, sy = x_selected[y_selected == -1].T
-        plt.scatter(sx, sy, s=25, c='black', alpha=0.2)
-        plt.legend()
-        plt.pause(0.05)
-
-
-if incr_times > 0:
-    print('\n')
-    cls = create_new_classifier()
-    cls.train(labeled_set, test_set, final_epochs, convex_epochs,
-              test_interval=3000)
-    cls.model.plot_boundary(ax, colors=['black'])
+    x_selected = x_selected.numpy()
+    y_selected = y_selected.numpy().reshape(-1)
+    sx, sy = x_selected.T
+    plt.scatter(sx, sy, s=7, label='{}'.format(incr))
+    sx, sy = x_selected[y_selected == -1].T
+    plt.scatter(sx, sy, s=25, c='black', alpha=0.2)
+    # plt.legend()
     plt.pause(0.05)
 
 

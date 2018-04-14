@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
 import settings
@@ -26,6 +27,24 @@ class RandomQuery(ActiveQuery):
     def query(self, unlabeled_set, labeled_set, k, unit_weight):
         drawn = torch.from_numpy(
             np.random.choice(len(unlabeled_set), k, replace=False))
+        x_selected = unlabeled_set.data_tensor[drawn]
+        y_selected = unlabeled_set.target_tensor[drawn]
+        self.update(
+            unlabeled_set, labeled_set, drawn,
+            unit_weight*torch.ones(k, 1))
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
+
+
+class UncertaintyQuery(ActiveQuery):
+
+    def query(self, unlabeled_set, labeled_set,
+              k, cls, incr_pool_size, unit_weight):
+        output = cls.model(
+            Variable(unlabeled_set.data_tensor)).type(settings.dtype)
+        sigmoid = nn.Sigmoid()
+        probs = sigmoid(output).data.numpy().reshape(-1)
+        s_idxs = np.argsort(np.abs(probs-0.5))[:incr_pool_size]
+        drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
         x_selected = unlabeled_set.data_tensor[drawn]
         y_selected = unlabeled_set.target_tensor[drawn]
         self.update(
