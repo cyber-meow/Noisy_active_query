@@ -90,10 +90,10 @@ class ToyClassifier(Classifier):
     def train_step(self, train_set, epoch, convex_loss=True):
         self.model.train()
         self.optimizer.zero_grad()
-        x = Variable(train_set.data_tensor).float()
-        target = Variable(train_set.target_tensor).float()
-        w = Variable(train_set.weight_tensor).float()
+        x, target = train_set[:]
+        x = Variable(x).float()
+        target = Variable(target).float()
         output = self.model(x)
-        _, loss = self.compute_loss(output, target, convex_loss, w)
+        _, loss = self.compute_loss(output, target, convex_loss)
         loss.backward()
         self.optimizer.step()

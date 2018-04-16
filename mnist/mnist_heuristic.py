@@ -18,8 +18,8 @@ from classifier import Classifier
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.5
-pho_n = 0
+pho_p = 0.4
+pho_n = 0.1
 
 batch_size = 40
 learning_rate = 1e-3
@@ -32,7 +32,7 @@ test_on_train = True
 num_clss = 1
 init_size = 500
 
-used_size = 100
+used_size = 200
 incr_times = 0
 query_batch_size = 40
 reduced_sample_size = 4
@@ -75,9 +75,6 @@ parser = argparse.ArgumentParser(description='MNIST noise active learning')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 
-parser.add_argument('--no-active', action='store_true', default=False,
-                    help='disables active learning')
-
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -109,20 +106,16 @@ train_data = train_data[used_idxs]
 train_labels = train_labels[used_idxs]
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
-train_labels_clean = torch.from_numpy(train_labels).unsqueeze(1).float()
-train_labels_corrupted = dataset.label_corruption(
-    train_labels_clean, pho_p, pho_n)
-train_labels = torch.cat(
-    [train_labels_corrupted, train_labels_clean], dim=1)
+train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
 
 data_init = (dataset.datasets_initialization_kcenter
              if kcenter
              else dataset.datasets_initialization)
 
 unlabeled_set, labeled_set = data_init(
-    train_data, train_labels, init_size, init_weight)
-train_labels = labeled_set.target_tensor.numpy()
-labeled_set.target_tensor = torch.from_numpy(train_labels[:, 0, None])
+    train_data, train_labels, init_size, init_weight, pho_p, pho_n)
+train_labels = torch.sign(labeled_set.target_tensor).numpy()
+train_labels_clean = labeled_set.label_tensor.numpy()
 
 
 test_data = mnist_test.test_data.numpy()
@@ -139,21 +132,21 @@ test_set = data.TensorDataset(
     torch.from_numpy(test_labels[used_idxs]).unsqueeze(1).float())
 
 
-def confidence_scores(data, labels):
+def confidence_scores(data, votes):
     p_d = distance.squareform(distance.pdist(data))
     sigma = np.mean(np.sort(p_d, axis=1)[:, :5])
     K = np.exp(-p_d**2/sigma**2)
-    labels = labels.reshape(-1)
-    a = (pho_p - pho_n)/2
-    b = (pho_p + pho_n)/2
-    pho_y = a * labels + b
-    pho_ny = pho_p + pho_n - pho_y
-    weights = 1 - pho_ny + pho_y
-    score = np.sum(K * weights * labels, axis=1) * labels
+    votes = votes.reshape(-1)
+    score = np.sum(K * votes, axis=1) * votes
     score = 2*score/np.std(score)
     conf = 1/(1+np.exp(-score))
+    # a = (pho_p - pho_n)/2
+    # b = (pho_p + pho_n)/2
+    # pho_y = a * np.sign(votes) + b
+    # pho_ny = pho_p + pho_n - pho_y
     # class_conf = (1-pho_y)/(1-pho_y+pho_ny)
-    return conf  # * class_conf
+    # return 1 - np.sqrt((1-conf)*(1-class_conf))
+    return conf
 
 
 def create_new_classifier():
@@ -176,22 +169,21 @@ cls.train(labeled_set, test_set, batch_size,
           test_on_train=test_on_train)
 out = cls.model(Variable(labeled_set.data_tensor).type(settings.dtype))
 sigmoid = nn.Sigmoid()
-cls_conf = sigmoid(
-            out*Variable(labeled_set.target_tensor).type(settings.dtype)
-            ).data.numpy().reshape(-1)
+cls_conf = sigmoid(out*Variable(
+            torch.sign(labeled_set.target_tensor)
+            ).type(settings.dtype)).data.numpy().reshape(-1)
 
 
 conf = confidence_scores(
     labeled_set.data_tensor.numpy().reshape(-1, 784),
-    train_labels[:, 0, None])
-print(train_labels[:, 0][conf < 0.5])
+    labeled_set.target_tensor.numpy())
 print(np.sum(conf < 0.5))
 
 # grid_img = torchvision.utils.make_grid(
 #     labeled_set.data_tensor[torch.from_numpy(np.argsort(conf)[:10])])
 # plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
 
-diff = (train_labels[:, 0] != train_labels[:, 1]).reshape(-1)
+diff = (train_labels != train_labels_clean).reshape(-1)
 plt.plot(diff[np.argsort(conf)], label='conf hit')
 plt.plot(diff[np.argsort(cls_conf)], '--', label='cls conf hit', alpha=0.6)
 plt.plot(np.sort(conf), label='conf')
@@ -201,7 +193,10 @@ plt.legend()
 plt.figure()
 plt.plot(cls.train_accuracies, label='train accuracy')
 plt.plot(cls.test_accuracies, label='test accuracy')
-plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
-plt.plot(cls.critic_confs, label='critic conf')
+# plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
+plt.plot([100-conf for conf in cls.critic_confs], label='critic conf')
+plt.plot([100-conf for conf in cls.confs], label='conf')
+# plt.plot(cls.critic_losses, label='critic logistic loss')
+plt.plot(cls.high_loss_errors, label='high loss error')
 plt.legend()
 plt.show()

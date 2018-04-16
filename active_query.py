@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+
 import numpy as np
 import settings
+from scipy.spatial import distance
 
 
 class ActiveQuery(object):
@@ -113,3 +115,38 @@ class IWALQuery(ActiveQuery):
         self.update(unlabeled_set, labeled_set, drawn, weights)
 
         return x_selected, y_selected, weights
+
+
+class HeuristicRelabel(object):
+
+    @staticmethod
+    def confidence_scores(data, votes, k, pho_p, pho_n):
+        p_d = distance.squareform(distance.pdist(data))
+        sigma = np.mean(np.sort(p_d, axis=1)[:, :k])
+        K = np.exp(-p_d**2/sigma**2)
+        votes = votes.reshape(-1)
+        score = np.sum(K * votes, axis=1) * votes
+        score = 2*score/np.std(score)
+        conf = 1/(1+np.exp(-score))
+        return conf
+
+    def diverse_flipped(self, labeled_set, num_clss, k, kn, pho_p, pho_n):
+        conf = self.confidence_scores(
+            labeled_set.data_tensor.numpy().reshape(len(labeled_set), -1),
+            labeled_set.target_tensor.numpy(), kn, pho_p, pho_n)
+        drop_indices = np.argwhere(conf < 0.2).reshape(-1)
+        print(drop_indices)
+        labeled_set.drop(drop_indices)
+        possible_query_indices = np.logical_and(0.2 <= conf, conf < 0.6)
+        possible_query_indices = np.argwhere(
+            possible_query_indices).reshape(-1)
+        indices_datasets = []
+        for _ in range(num_clss):
+            if k <= len(possible_query_indices):
+                flipped_idxs = np.random.choice(
+                    possible_query_indices, k, replace=False)
+            else:
+                flipped_idxs = possible_query_indices
+            new_set = labeled_set.modify(flipped_idxs)
+            indices_datasets.append((flipped_idxs, new_set))
+        return indices_datasets, drop_indices

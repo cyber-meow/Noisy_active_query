@@ -17,14 +17,15 @@ from classifier import Classifier, majority_vote
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.5
-pho_n = 0
+pho_p = 0.2
+pho_n = 0.2
 
 batch_size = 40
 learning_rate = 1e-3
 weight_decay = 1e-2
 
-convex_epochs = 10
+init_convex_epochs = 10
+retrain_convex_epochs = 3
 retrain_epochs = 60
 test_on_train = False
 
@@ -32,8 +33,8 @@ num_clss = 1
 init_size = 100
 
 used_size = 90
-incr_times = 10
-query_batch_size = 20
+incr_times = 3
+query_batch_size = 60
 reduced_sample_size = 2
 
 init_weight = 1
@@ -50,7 +51,8 @@ params = OrderedDict([
     ('\nbatch_size', batch_size),
     ('learning_rate', learning_rate),
     ('weight_decay', weight_decay),
-    ('\nconvex_epochs', convex_epochs),
+    ('\ninit_convex_epochs', init_convex_epochs),
+    ('retrain_convex_epochs', retrain_convex_epochs),
     ('retrain_epochs', retrain_epochs),
     ('\nnum_clss', num_clss),
     ('init_size', init_size),
@@ -110,14 +112,13 @@ train_labels = train_labels[used_idxs]
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
-train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
 
 data_init = (dataset.datasets_initialization_kcenter
              if kcenter
              else dataset.datasets_initialization)
 
 unlabeled_set, labeled_set = data_init(
-    train_data, train_labels, init_size, init_weight)
+    train_data, train_labels, init_size, init_weight, pho_p, pho_n)
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
 
@@ -158,6 +159,9 @@ IWALQuery = IWALQuery()
 for incr in range(incr_times+1):
 
     print('\nincr {}'.format(incr))
+    convex_epochs = (init_convex_epochs
+                     if incr == 0
+                     else retrain_convex_epochs)
 
     if not args.no_active:
         print('\nActive Query'.format(incr))
@@ -194,9 +198,11 @@ if incr_times > 0:
         print('\nActively Selected Points')
         cls.train(
             labeled_set, test_set, batch_size,
-            retrain_epochs*2, convex_epochs, test_on_train=test_on_train)
+            retrain_epochs*2, init_convex_epochs,
+            test_on_train=test_on_train)
 
     print('\nRandomly Selected Points')
     cls_rand.train(
         labeled_set_rand, test_set, batch_size,
-        retrain_epochs*2, convex_epochs, test_on_train=test_on_train)
+        retrain_epochs*2, init_convex_epochs,
+        test_on_train=test_on_train)

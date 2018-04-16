@@ -219,7 +219,8 @@ def create_new_classifier():
             model,
             pho_p=pho_p,
             pho_n=pho_n,
-            lr=learning_rate)
+            lr=learning_rate,
+            weighted=True)
     return cls
 
 

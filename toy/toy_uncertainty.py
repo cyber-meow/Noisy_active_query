@@ -1,5 +1,3 @@
-import os
-
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,8 +13,8 @@ n_positive = 10000
 n_negative = 10000
 n = n_positive + n_negative
 
-pho_p = 0.5
-pho_n = 0
+pho_p = 0.2
+pho_n = 0.2
 pho_p_c = pho_p
 pho_n_c = pho_n
 
@@ -34,9 +32,6 @@ query_batch_size = 6
 incr_times = 8
 incr_pool_size = 1500
 
-load = False
-save = False
-
 
 def create_new_classifier():
     model = Net()
@@ -49,45 +44,25 @@ def create_new_classifier():
     return cls
 
 
-if os.path.exists('datasets/toy/train_data.npy') and load:
-    x_all = np.load('datasets/toy/train_data.npy')
-    y_all = np.load('datasets/toy/train_labels_clean.npy')
-    y_all_corrupted = np.load('datasets/toy/train_labels.npy')
-
+if moons:
+    x_all, y_all = datasets.make_moons(n, noise=0.07)
 else:
-    if moons:
-        x_all, y_all = datasets.make_moons(n, noise=0.07)
-    else:
-        x_all, y_all = datasets.make_circles(n, noise=0.03)
-    y_all = (y_all*2-1).reshape(-1, 1)
-
-    y_all_corrupted = dataset.label_corruption(y_all, pho_p, pho_n)
-
-    if save:
-        np.save('datasets/toy/train_data', x_all)
-        np.sqve('datasets/toy/train_labels_clean.npy', y_all)
-        np.save('datasets/toy/train_labels', y_all_corrupted)
+    x_all, y_all = datasets.make_circles(n, noise=0.03)
+y_all = (y_all*2-1).reshape(-1, 1)
 
 if kcenter:
     unlabeled_set, labeled_set = dataset.datasets_initialization_kcenter(
-        x_all, y_all_corrupted, init_size, init_weight)
+        x_all, y_all, init_size, init_weight, pho_p, pho_n)
 else:
     unlabeled_set, labeled_set = dataset.datasets_initialization(
-        x_all, y_all_corrupted, init_size, init_weight)
+        x_all, y_all, init_size, init_weight, pho_p, pho_n)
 
 
-if os.path.exists('datasets/toy/test_data.npy') and load:
-    x_test = np.load('datasets/toy/test_data.npy')
-    y_test = np.load('datasets/toy/test_labels.npy')
+if moons:
+    x_test, y_test = datasets.make_moons(n, noise=0.07)
 else:
-    if moons:
-        x_test, y_test = datasets.make_moons(n, noise=0.07)
-    else:
-        x_test, y_test = datasets.make_circles(n, noise=0.03)
-    y_test = (y_test*2-1).reshape(-1, 1)
-    if save:
-        np.save('datasets/toy/test_data', x_test)
-        np.save('datasets/toy/test_labels', y_test)
+    x_test, y_test = datasets.make_circles(n, noise=0.03)
+y_test = (y_test*2-1).reshape(-1, 1)
 
 test_set = torch.utils.data.TensorDataset(
     torch.from_numpy(x_test).float(), torch.from_numpy(y_test).float())
@@ -108,7 +83,7 @@ plt.scatter(nx, ny, color='turquoise', s=3)
 plt.pause(0.05)
 
 x_init = labeled_set.data_tensor.numpy()
-y_init = labeled_set.target_tensor.numpy().reshape(-1)
+y_init = torch.sign(labeled_set.target_tensor).numpy().reshape(-1)
 
 cx, cy = np.array(x_init).T
 plt.scatter(cx, cy, s=3, color='yellow')

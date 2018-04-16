@@ -15,7 +15,7 @@ import settings
 from classifier import Classifier
 
 
-pho_p = 0.1
+pho_p = 0.5
 pho_n = 0.1
 
 batch_size = 50
@@ -68,8 +68,7 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
-parser.add_argument('--no-active', action='store_true', default=False,
-                    help='disables active learning')
+
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -96,20 +95,16 @@ X_train, X_test, y_train, y_test = train_test_split(
     features, labels, test_size=0.2, random_state=0)
 
 train_data = torch.from_numpy(X_train.values).float()
-train_labels_clean = torch.from_numpy(y_train.values).unsqueeze(1).float()
-train_labels_corrupted = dataset.label_corruption(
-    train_labels_clean, pho_p, pho_n)
-train_labels = torch.cat(
-    [train_labels_corrupted, train_labels_clean], dim=1)
+train_labels = torch.from_numpy(y_train.values).unsqueeze(1).float()
 
 data_init = (dataset.datasets_initialization_kcenter
              if kcenter
              else dataset.datasets_initialization)
 
 unlabeled_set, labeled_set = data_init(
-    train_data, train_labels, init_size, init_weight)
-train_labels = labeled_set.target_tensor.numpy()
-labeled_set.target_tensor = torch.from_numpy(train_labels[:, 0, None])
+    train_data, train_labels, init_size, init_weight, pho_p, pho_n)
+train_labels = torch.sign(labeled_set.target_tensor).numpy()
+train_labels_clean = labeled_set.label_tensor.numpy()
 
 
 test_data = torch.from_numpy(X_test.values).float()
@@ -128,17 +123,12 @@ class Linear(nn.Module):
         return y_pred
 
 
-def confidence_scores(data, labels):
+def confidence_scores(data, votes):
     p_d = distance.squareform(distance.pdist(data))
     sigma = np.mean(np.sort(p_d, axis=1)[:, :5])
     K = np.exp(-p_d**2/sigma**2)
-    labels = labels.reshape(-1)
-    a = (pho_p - pho_n)/2
-    b = (pho_p + pho_n)/2
-    pho_y = a * labels + b
-    pho_ny = pho_p + pho_n - pho_y
-    weights = 1 - pho_ny + pho_y
-    score = np.sum(K * weights * labels, axis=1) * labels
+    votes = votes.reshape(-1)
+    score = np.sum(K * votes, axis=1) * votes
     score = 2*score/np.std(score)
     conf = 1/(1+np.exp(-score))
     # class_conf = (1-pho_y)/(1-pho_y+pho_ny)
@@ -169,15 +159,14 @@ cls_conf = sigmoid(
 
 conf = confidence_scores(
     labeled_set.data_tensor.numpy(),
-    train_labels[:, 0, None])
-print(train_labels[:, 0][conf < 0.5])
+    labeled_set.target_tensor.numpy())
 print(np.sum(conf < 0.5))
 
 # grid_img = torchvision.utils.make_grid(
 #     labeled_set.data_tensor[torch.from_numpy(np.argsort(conf)[:10])])
 # plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
 
-diff = (train_labels[:, 0] != train_labels[:, 1]).reshape(-1)
+diff = (train_labels != train_labels_clean).reshape(-1)
 plt.plot(diff[np.argsort(conf)], label='conf hit')
 plt.plot(diff[np.argsort(cls_conf)], '--', label='cls conf hit', alpha=0.6)
 plt.plot(np.sort(conf), label='conf')
@@ -187,7 +176,10 @@ plt.legend()
 plt.figure()
 plt.plot(cls.train_accuracies, label='train accuracy')
 plt.plot(cls.test_accuracies, label='test accuracy')
-plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
-plt.plot(cls.critic_confs, label='critic conf')
+# plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
+plt.plot([100-conf for conf in cls.critic_confs], label='critic conf')
+plt.plot([100-conf for conf in cls.confs], label='conf')
+# plt.plot(cls.critic_losses, label='critic logistic loss')
+plt.plot(cls.high_loss_errors, label='high loss error')
 plt.legend()
 plt.show()

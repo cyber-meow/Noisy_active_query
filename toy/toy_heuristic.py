@@ -2,10 +2,10 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import datasets
+from scipy.spatial import distance
 
 import dataset
 from toy.basics import Net, ToyClassifier
-from active_query import HeuristicRelabel
 
 
 moons = True
@@ -28,8 +28,8 @@ init_weight = 1
 init_size = 90
 kcenter = False
 
-corr_times = 8
-corr_size = 3
+corr_times = 2
+corr_size = 10
 
 load = False
 save = False
@@ -112,42 +112,92 @@ def give_correct(y_corrupted, y_clean, k):
     return None
 
 
+def confidence_scores(data, votes):
+    p_d = distance.squareform(distance.pdist(data))
+    sigma = np.mean(np.sort(p_d, axis=1)[:, :5])
+    K = np.exp(-p_d**2/sigma**2)
+    votes = votes.reshape(-1)
+    score = np.sum(K * votes, axis=1) * votes
+    score = 2*score/np.std(score)
+    conf = 1/(1+np.exp(-score))
+    return conf
+
+
+def density_estimation(labeled, unlabeled):
+    p_d = distance.squareform(distance.pdist(labeled))
+    sigmas = np.mean(np.sort(p_d, axis=1)[:, 1:4], axis=1)
+    print(sigmas)
+    c_d = distance.cdist(labeled, unlabeled)
+    # labeled_K = np.exp(-p_d**2/sigma**2)
+    unlabeled_K = np.exp(-c_d**2/sigmas[:, None]**2)
+    # labeled_density = np.sum(labeled_K, axis=1)
+    unlabeled_impact = np.sum(unlabeled_K, axis=1)
+    return unlabeled_impact/np.mean(unlabeled_impact)
+    # return np.log(1+np.exp(-density_ratio))
+
+
 for corr in range(corr_times):
 
-    print('\nRelabel {}'.format(corr))
+    print('\ncorrection {}'.format(corr))
 
     cls.train(labeled_set, test_set, retrain_epochs,
-              convex_epochs, test_interval=10,
-              print_interval=3000, test_on_train=True)
+              convex_epochs, test_interval=10, test_on_train=True)
     if corr >= 1:
         cont.collections[0].set_linewidth(1)
         cont.collections[0].set_alpha(0.3)
     cont = cls.model.plot_boundary(ax, colors=[cm(corr/corr_times)])
     plt.pause(0.05)
 
-    relabel_idxs, drop_idxs = HeuristicRelabel().diverse_flipped(
-        labeled_set, 1, corr_size, 5, pho_p, pho_n)
-    relabel_idxs, _ = relabel_idxs[0]
+    conf = confidence_scores(
+        labeled_set.data_tensor.numpy(), labeled_set.target_tensor.numpy())
+    dr = density_estimation(labeled_set.data_tensor.numpy(), x_all)
+    x = labeled_set.data_tensor.numpy()
 
-    print(relabel_idxs)
-    labeled_set.query(relabel_idxs)
-    labeled_set.remove_no_effect()
+    # diff = y_init[:, 0] != y_init[:, 1]
+    # plt.plot(diff[np.argsort(conf)])
 
-    x_dropped = x_init[drop_idxs]
-    dx, dy = x_dropped.T
-    plt.scatter(dx, dy, s=40, marker='x', label='{} dropped'.format(corr))
+    sizes = (1-conf) * dr * 30
+    sizes[sizes < np.percentile(sizes, 75)] = 0
+    print(sorted(sizes))
+    lx, ly = x.T
+    plt.scatter(lx, ly, s=sizes, alpha=0.4, label='{} conf'.format(corr))
     plt.legend()
     plt.pause(0.05)
+    while not plt.waitforbuttonpress(1):
+        pass
 
-    x_selected = x_init[relabel_idxs]
-    y = torch.sign(labeled_set.target_tensor).numpy().reshape(-1)
-    # print(labeled_set.target_tensor.numpy().reshape(-1)[relabel_idxs])
-    y_selected = y[relabel_idxs]
+    sizes = (1-conf) * 60
+    sizes[sizes < np.percentile(sizes, 75)] = 0
+    print(sorted(sizes))
+    lx, ly = x.T
+    plt.scatter(lx, ly, s=sizes, color='red', marker='x',
+                alpha=0.2, label='{} conf'.format(corr))
+    plt.legend()
+    plt.pause(0.05)
+    while not plt.waitforbuttonpress(1):
+        pass
+
+    '''
+    sizes = dr * 60
+    sizes[sizes < np.percentile(sizes, 70)] = 0
+    print(sorted(sizes))
+    lx, ly = x.T
+    plt.scatter(lx, ly, s=sizes, color='green', marker='o',
+                alpha=0.4, label='{} conf'.format(corr))
+    plt.legend()
+    plt.pause(0.05)
+    '''
+
+    flipped_indices = give_correct(y_init, y_clean, corr_size)
+
+    if flipped_indices is None:
+        break
+
+    x_selected = x_init[flipped_indices]
+    labeled_set.weight_tensor[torch.from_numpy(flipped_indices)] = 0
 
     sx, sy = x_selected.T
-    plt.scatter(sx, sy, s=20, alpha=0.6, label='{}'.format(corr))
-    sx, sy = x_selected[y_selected == -1].T
-    plt.scatter(sx, sy, s=50, c='black', alpha=0.2, marker='+')
+    plt.scatter(sx, sy, s=5, alpha=0.5, label='{}'.format(corr))
     plt.legend()
     plt.pause(0.05)
 

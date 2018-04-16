@@ -13,20 +13,24 @@ import settings
 
 class Classifier(object):
 
-    def __init__(self, model, pho_p=0, pho_n=0, lr=5e-3, weight_decay=1e-2):
+    def __init__(self, model, pho_p=0, pho_n=0,
+                 lr=5e-3, weight_decay=1e-2, weighted=False):
         self.model = model
         self.lr = lr
         self.weight_decay = weight_decay
         self.pho_p = pho_p
         self.pho_n = pho_n
-        self.threshold = 1
-        self.init_optimizer()
+        self.weighted = weighted
         self.smallest_conf = 0
         self.critic_model = None
         self.test_accuracies = []
         self.train_accuracies = []
-        self.high_loss_fractions = []
+        # self.high_loss_fractions = []
         self.critic_confs = []
+        self.confs = []
+        self.critic_losses = []
+        self.high_loss_errors = []
+        self.init_optimizer()
 
     def init_optimizer(self):
         self.optimizer = optim.Adam(
@@ -60,8 +64,8 @@ class Classifier(object):
             if convex_epochs is not None and epoch >= convex_epochs:
                 if (self.test_accuracies != []
                         and self.test_accuracies[-1] < 75):
-                    print('Use logistic exceptionally')
-                    self.train_step(train_loader, epoch)
+                    # print('Use logistic exceptionally')
+                    self.train_step(train_loader, epoch, False)
                     # self.train_step(train_loader, epoch, convex_loss=False)
                 else:
                     self.train_step(train_loader, epoch, convex_loss=False)
@@ -87,14 +91,13 @@ class Classifier(object):
     def train_step(self, train_loader, epoch, convex_loss=True):
         self.model.train()
         total_loss = 0
-        for batch_idx, (x, target, w) in enumerate(train_loader):
+        for batch_idx, (x, target) in enumerate(train_loader):
             self.optimizer.zero_grad()
-            x, target, w = (
+            x, target = (
                 Variable(x).type(settings.dtype),
-                Variable(target).type(settings.dtype),
-                Variable(w).type(settings.dtype))
+                Variable(target).type(settings.dtype))
             output = self.model(x)
-            _, loss = self.compute_loss(output, target, convex_loss, w)
+            _, loss = self.compute_loss(output, target, convex_loss)
             total_loss += loss.data[0]
             loss.backward()
             self.optimizer.step()
@@ -110,40 +113,51 @@ class Classifier(object):
             sigmoid = nn.Sigmoid()
             return sigmoid(-fx)
 
-    def compute_loss(self, output, target, convex_loss=True, w=None):
-        a = (self.pho_p - self.pho_n)/2
-        b = (self.pho_p + self.pho_n)/2
-        pho_y = a * target + b
-        pho_ny = self.pho_p + self.pho_n - pho_y
-        loss = self.basic_loss(target*output, convex_loss)
+    def compute_loss(self, output, target, convex_loss=True):
+        loss = self.basic_loss(torch.sign(target)*output, convex_loss)
+        loss = torch.abs(target) * loss
         # loss_ny = self.basic_loss(-targets*outputs, convex_loss)
-        loss = (1-pho_ny+pho_y) * loss
-        if w is not None:
-            assert w.shape == loss.shape
-            loss *= w
+        if self.weighted:
+            a = (self.pho_p - self.pho_n)/2
+            b = (self.pho_p + self.pho_n)/2
+            pho_y = a * target + b
+            pho_ny = self.pho_p + self.pho_n - pho_y
+            loss = (1-pho_ny+pho_y) * loss
         total_loss = torch.sum(loss)
         return loss, total_loss
 
     def find_high_loss_samples(self, labeled_set):
         self.model.eval()
         x = Variable(labeled_set.data_tensor).type(settings.dtype)
-        target = Variable(labeled_set.target_tensor).type(settings.dtype)
+        target = Variable(
+            torch.sign(labeled_set.target_tensor)).type(settings.dtype)
         output = self.model(x)
         prob = self.basic_loss(-output*target, False).data.numpy().reshape(-1)
-        high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
+        # high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
         small_conf_number = int(len(prob)*(self.pho_p+self.pho_n)/2)
         critic_conf = np.mean(np.sort(prob)[:small_conf_number])*100
+        logistic_losses = self.basic_loss(
+            output*target, True).data.numpy().reshape(-1)
+        high_loss_indices = np.argsort(logistic_losses)[-small_conf_number:]
+        # critic_loss = np.mean(logistic_losses[high_loss_indices])*10
+        errors = torch.sign(
+            output*target).data.numpy().reshape(-1)[high_loss_indices]
+        error = np.mean((1-errors)/2)*100
         if critic_conf < self.smallest_conf:
             self.smallest_conf = critic_conf
             self.critic_model = deepcopy(self.model)
         self.critic_confs.append(critic_conf)
-        self.high_loss_fractions.append(high_loss_fraction)
+        self.confs.append(np.mean(prob)*100)
+        # self.critic_losses.append(critic_loss)
+        # self.high_loss_fractions.append(high_loss_fraction)
+        self.high_loss_errors.append(error)
         # print('High loss samples: {} %'.format(high_loss_fraction))
 
     def test(self, test_set, set_name, to_print=True):
         self.model.eval()
         x = Variable(test_set.data_tensor).type(settings.dtype)
-        target = Variable(test_set.target_tensor).type(settings.dtype)
+        target = Variable(
+            torch.sign(test_set.target_tensor)).type(settings.dtype)
         output = self.model(x)
         pred = torch.sign(output)
         correct = torch.sum(pred.eq(target).float()).data[0]

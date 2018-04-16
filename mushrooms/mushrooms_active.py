@@ -99,14 +99,13 @@ train_data = torch.from_numpy(X_train.values).float()
 # std = torch.std(train_data, 1, keepdim=True)
 # train_data = (train_data-m)/std
 train_labels = torch.from_numpy(y_train.values).unsqueeze(1).float()
-train_labels = dataset.label_corruption(train_labels, pho_p, pho_n)
 
 data_init = (dataset.datasets_initialization_kcenter
              if kcenter
              else dataset.datasets_initialization)
 
 unlabeled_set, labeled_set = data_init(
-    train_data, train_labels, init_size, init_weight)
+    train_data, train_labels, init_size, init_weight, pho_p, pho_n)
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
 
