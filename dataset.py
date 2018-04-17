@@ -55,6 +55,9 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
         self.is_used_tensor = torch.cat(
             (self.is_used_tensor, torch.ones_like(weight_tensor)), 0)
         self.query(np.arange(old_length, self.target_tensor.size(0)))
+        update_labels = torch.sign(self.target_tensor[torch.LongTensor(
+            np.arange(old_length, self.target_tensor.size(0)))])
+        return data_tensor, update_labels
 
     def modify(self, indices):
         new_set = deepcopy(self)
@@ -81,7 +84,7 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
         # print(self.target_tensor)
 
     def drop(self, indices):
-        if indices == []:
+        if len(indices) == 0:
             return
         if not torch.is_tensor(indices):
             indices = torch.from_numpy(indices)
@@ -89,7 +92,7 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
 
     def remove_no_effect(self):
         if torch.sum(self.target_tensor == 0) == 0:
-            return
+            return None, None
         remove_indices = torch.from_numpy(np.argwhere(
             (self.target_tensor == 0).numpy().reshape(-1)).reshape(-1))
         remain_indices = torch.from_numpy(np.argwhere(

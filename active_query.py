@@ -10,7 +10,7 @@ from scipy.spatial import distance
 class ActiveQuery(object):
 
     def update(self, unlabeled_set, labeled_set, drawn, weights):
-        labeled_set.update(
+        update_data, update_label = labeled_set.update(
             unlabeled_set.data_tensor[drawn],
             unlabeled_set.target_tensor[drawn],
             weights)
@@ -19,6 +19,7 @@ class ActiveQuery(object):
         idxs = torch.from_numpy(np.argwhere(idxs).reshape(-1))
         unlabeled_set.data_tensor = unlabeled_set.data_tensor[idxs]
         unlabeled_set.target_tensor = unlabeled_set.target_tensor[idxs]
+        return update_data, update_label
 
     def query(self, labeled_set, unlabeled_set, k, *args):
         raise NotImplementedError
@@ -29,9 +30,7 @@ class RandomQuery(ActiveQuery):
     def query(self, unlabeled_set, labeled_set, k, unit_weight):
         drawn = torch.from_numpy(
             np.random.choice(len(unlabeled_set), k, replace=False))
-        x_selected = unlabeled_set.data_tensor[drawn]
-        y_selected = unlabeled_set.target_tensor[drawn]
-        self.update(
+        x_selected, y_selected = self.update(
             unlabeled_set, labeled_set, drawn,
             unit_weight*torch.ones(k, 1))
         return x_selected, y_selected, unit_weight*torch.ones(k, 1)
@@ -47,9 +46,7 @@ class UncertaintyQuery(ActiveQuery):
         probs = sigmoid(output).data.numpy().reshape(-1)
         s_idxs = np.argsort(np.abs(probs-0.5))[:incr_pool_size]
         drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
-        x_selected = unlabeled_set.data_tensor[drawn]
-        y_selected = unlabeled_set.target_tensor[drawn]
-        self.update(
+        x_selected, y_selected = self.update(
             unlabeled_set, labeled_set, drawn,
             unit_weight*torch.ones(k, 1))
         return x_selected, y_selected, unit_weight*torch.ones(k, 1)
@@ -110,9 +107,8 @@ class IWALQuery(ActiveQuery):
         weights = torch.from_numpy(weights).float()
         print(weights)
 
-        x_selected = unlabeled_set.data_tensor[drawn]
-        y_selected = unlabeled_set.target_tensor[drawn]
-        self.update(unlabeled_set, labeled_set, drawn, weights)
+        x_selected, y_selected = self.update(
+            unlabeled_set, labeled_set, drawn, weights)
 
         return x_selected, y_selected, weights
 
@@ -134,10 +130,13 @@ class HeuristicRelabel(object):
         conf = self.confidence_scores(
             labeled_set.data_tensor.numpy().reshape(len(labeled_set), -1),
             labeled_set.target_tensor.numpy(), kn, pho_p, pho_n)
-        drop_indices = np.argwhere(conf < 0.2).reshape(-1)
-        print(drop_indices)
+        noise_rate = (pho_p + pho_n)/2 * 100
+        th1 = np.percentile(conf, noise_rate/3)
+        th2 = np.percentile(conf, noise_rate+5)
+        print(th1, th2)
+        drop_indices = np.argwhere(conf < th1).reshape(-1)
         labeled_set.drop(drop_indices)
-        possible_query_indices = np.logical_and(0.2 <= conf, conf < 0.6)
+        possible_query_indices = np.logical_and(th1 <= conf, conf < th2)
         possible_query_indices = np.argwhere(
             possible_query_indices).reshape(-1)
         indices_datasets = []
@@ -150,3 +149,20 @@ class HeuristicRelabel(object):
             new_set = labeled_set.modify(flipped_idxs)
             indices_datasets.append((flipped_idxs, new_set))
         return indices_datasets, drop_indices
+
+
+def greatest_impact(main_cls, indices_clss, unlabeled_set):
+    x = Variable(unlabeled_set.data_tensor).type(settings.dtype)
+    main_pred = torch.sign(main_cls.model(x))
+    most_disagree_num = 0
+    best_indices = None
+    disagree_nums = []
+    for indices, cls in indices_clss:
+        pred = torch.sign(cls.model(x))
+        disagree_num = torch.sum(pred != main_pred).data[0]
+        disagree_nums.append(disagree_num)
+        if disagree_num > most_disagree_num:
+            most_disagree_num = disagree_num
+            best_indices = indices
+    print('\n', disagree_nums)
+    return best_indices

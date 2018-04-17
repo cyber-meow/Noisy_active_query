@@ -79,9 +79,10 @@ class Classifier(object):
                 if test_on_train:
                     self.test(labeled_set, 'Train', to_print)
                 self.test(test_set, 'Test', to_print)
-                self.find_high_loss_samples(labeled_set)
+                self.find_high_loss_samples(labeled_set, to_print)
 
-        self.model = self.critic_model
+        if self.critic_model is not None:
+            self.model = self.critic_model
         if test_on_train:
             self.test(labeled_set, 'Train')
             self.train_accuracies.pop()
@@ -126,27 +127,32 @@ class Classifier(object):
         total_loss = torch.sum(loss)
         return loss, total_loss
 
-    def find_high_loss_samples(self, labeled_set):
+    def find_high_loss_samples(self, labeled_set, to_print=True):
         self.model.eval()
         x = Variable(labeled_set.data_tensor).type(settings.dtype)
         target = Variable(
             torch.sign(labeled_set.target_tensor)).type(settings.dtype)
+        small_conf_number = int(len(target)*(self.pho_p+self.pho_n)/2)
+        if small_conf_number <= 0:
+            return
         output = self.model(x)
-        prob = self.basic_loss(-output*target, False).data.numpy().reshape(-1)
+        prob = self.basic_loss(
+            -output*target, False).data.cpu().numpy().reshape(-1)
         # high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
-        small_conf_number = int(len(prob)*(self.pho_p+self.pho_n)/2)
         critic_conf = np.mean(np.sort(prob)[:small_conf_number])*100
         logistic_losses = self.basic_loss(
-            output*target, True).data.numpy().reshape(-1)
+            output*target, True).data.cpu().numpy().reshape(-1)
         high_loss_indices = np.argsort(logistic_losses)[-small_conf_number:]
         # critic_loss = np.mean(logistic_losses[high_loss_indices])*10
         errors = torch.sign(
-            output*target).data.numpy().reshape(-1)[high_loss_indices]
+            output*target).data.cpu().numpy().reshape(-1)[high_loss_indices]
         error = np.mean((1-errors)/2)*100
         if critic_conf < self.smallest_conf:
             self.smallest_conf = critic_conf
             self.critic_model = deepcopy(self.model)
         self.critic_confs.append(critic_conf)
+        # if to_print:
+        #     print('critic confidence {:.2f}%'.format(critic_conf))
         self.confs.append(np.mean(prob)*100)
         # self.critic_losses.append(critic_loss)
         # self.high_loss_fractions.append(high_loss_fraction)
@@ -179,7 +185,7 @@ def majority_vote(clss, test_set):
             Variable(test_set.data_tensor).type(settings.dtype))
         pred += torch.sign(output).data.cpu()
     pred = torch.sign(pred)
-    correct = torch.sum(pred.eq(test_set.target_tensor).float())
+    correct = torch.sum(pred.eq(torch.sign(test_set.target_tensor)).float())
     accuracy = 100 * correct / len(test_set)
     print(
         'Majority vote: Accuracy: {}/{} ({:.2f}%)'.format(

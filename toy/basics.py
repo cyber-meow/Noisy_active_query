@@ -78,9 +78,10 @@ class ToyClassifier(Classifier):
                 if test_on_train:
                     self.test(labeled_set, 'Train', to_print)
                 self.test(test_set, 'Test', to_print)
-                self.find_high_loss_samples(labeled_set)
+                self.find_high_loss_samples(labeled_set, to_print)
 
-        self.model = self.critic_model
+        if self.critic_model is not None:
+            self.model = self.critic_model
         if test_on_train:
             self.test(train_set, 'Train')
             self.train_accuracies.pop()
