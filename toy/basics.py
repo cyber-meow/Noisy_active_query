@@ -45,6 +45,7 @@ class ToyClassifier(Classifier):
               test_interval=1, print_interval=1, test_on_train=False):
 
         self.init_optimizer()
+        self.best_accuracy = 0
 
         if used_size is None:
             train_set = labeled_set
@@ -80,8 +81,8 @@ class ToyClassifier(Classifier):
                 self.test(test_set, 'Test', to_print)
                 self.find_high_loss_samples(labeled_set, to_print)
 
-        if self.critic_model is not None:
-            self.model = self.critic_model
+        # if self.critic_model is not None:
+        #     self.model = self.critic_model
         if test_on_train:
             self.test(train_set, 'Train')
             self.train_accuracies.pop()

@@ -6,10 +6,10 @@ from copy import deepcopy
 
 import dataset
 from toy.basics import Net, ToyClassifier
-from active_query import IWALQuery, HeuristicRelabel, greatest_impact
+from active_query import DisagreementQuery, greatest_impact
+from active_query import HeuristicRelabel, ClsHeuristicRelabel
 
-
-moons = False
+moons = True
 n_positive = 10000
 n_negative = 10000
 n = n_positive + n_negative
@@ -33,8 +33,10 @@ init_weight = 1
 weight_ratio = 2
 
 query_times = 5
-relabel_size = 5
-incr_size = 5
+relabel_size = 0
+random_flipped_size = 5
+incr_size = 10
+cls_uncertainty = True
 
 
 def create_new_classifier():
@@ -98,7 +100,7 @@ plt.pause(0.05)
 
 
 cls = create_new_classifier()
-IWALQuery = IWALQuery()
+# IWALQuery = IWALQuery()
 
 conts = []
 cm = plt.get_cmap('gist_rainbow')
@@ -123,9 +125,14 @@ for query in range(query_times+1):
 
     labeled_set.is_used_tensor[:] = 1
 
-    flipped_idxs_sets, drop_idxs = HeuristicRelabel().diverse_flipped(
-        labeled_set, num_clss-1, relabel_size, 5, pho_p, pho_n)
+    if cls_uncertainty:
+        flipped_idxs_sets, drop_idxs = ClsHeuristicRelabel().diverse_flipped(
+            labeled_set, num_clss-1, random_flipped_size, cls, pho_p, pho_n)
+    else:
+        flipped_idxs_sets, drop_idxs = HeuristicRelabel().diverse_flipped(
+            labeled_set, num_clss-1, random_flipped_size, 5, pho_p, pho_n)
     print(drop_idxs)
+    # labeled_set.is_used_tensor[:] = 1
 
     x_dropped = labeled_set.data_tensor.numpy()[drop_idxs]
     dx, dy = x_dropped.T
@@ -154,21 +161,24 @@ for query in range(query_times+1):
         idxs_clss.append((idxs, new_cls))
         clss.append(new_cls)
 
-    relabel_idxs = greatest_impact(cls, idxs_clss, unlabeled_set)
-    print(relabel_idxs)
+    if relabel_size != 0:
+        relabel_idxs = greatest_impact(cls, idxs_clss, unlabeled_set)
+        print(relabel_idxs)
+        labeled_set.query(relabel_idxs)
 
-    labeled_set.query(relabel_idxs)
     y = torch.sign(labeled_set.target_tensor).numpy().reshape(-1)
 
     if incr_size != 0:
-        x_selected, y_selected, _ = IWALQuery.query(
+        x_selected, y_selected, _ = DisagreementQuery().query(
             unlabeled_set, labeled_set, incr_size, clss, weight_ratio)
         x_selected = x_selected.numpy()
         y_selected = y_selected.numpy().reshape(-1)
-        x_selected = np.concatenate([x_selected, x[relabel_idxs]])
-        # print(labeled_set.target_tensor.numpy().reshape(-1)[relabel_idxs])
-        y_selected = np.concatenate([y_selected, y[relabel_idxs]])
+        if relabel_size != 0:
+            x_selected = np.concatenate([x_selected, x[relabel_idxs]])
+            # print(labeled_set.target_tensor.numpy().reshape(-1)[relabel_idxs])
+            y_selected = np.concatenate([y_selected, y[relabel_idxs]])
     else:
+        assert(relabel_size != 0)
         x_selected = x[relabel_idxs]
         y_selected = y[relabel_idxs]
 
@@ -181,12 +191,13 @@ for query in range(query_times+1):
     # plt.legend()
     plt.pause(0.05)
 
-    removed_data, remove_labels = labeled_set.remove_no_effect()
-    if removed_data is not None:
-        unlabeled_set.data_tensor = torch.cat(
-            (unlabeled_set.data_tensor, removed_data), 0)
-        unlabeled_set.target_tensor = torch.cat(
-            (unlabeled_set.target_tensor, remove_labels), 0)
+    if relabel_size != 0:
+        removed_data, remove_labels = labeled_set.remove_no_effect()
+        if removed_data is not None:
+            unlabeled_set.data_tensor = torch.cat(
+                (unlabeled_set.data_tensor, removed_data), 0)
+            unlabeled_set.target_tensor = torch.cat(
+                (unlabeled_set.target_tensor, remove_labels), 0)
 
     while not plt.waitforbuttonpress(1):
         pass

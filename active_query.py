@@ -113,10 +113,55 @@ class IWALQuery(ActiveQuery):
         return x_selected, y_selected, weights
 
 
+class DisagreementQuery(ActiveQuery):
+
+    def query(self, unlabeled_set, labeled_set, k, clss, unit_weight):
+
+        n = len(unlabeled_set)
+
+        p_predict = np.zeros(n)
+        n_predict = np.zeros(n)
+
+        for cls in clss:
+            output = cls.model(
+                Variable(unlabeled_set.data_tensor).type(settings.dtype)).cpu()
+            predict = torch.sign(output).data.numpy().reshape(-1)
+            p_predict = np.logical_or(predict == 1, p_predict)
+            n_predict = np.logical_or(predict == -1, n_predict)
+
+        disagreement_area = np.logical_and(p_predict, n_predict)
+        disagreement_idxs = np.argwhere(disagreement_area).reshape(-1)
+        print('dis', len(disagreement_idxs))
+
+        drawn = torch.from_numpy(
+            np.random.choice(disagreement_idxs, k, replace=False))
+        x_selected, y_selected = self.update(
+            unlabeled_set, labeled_set, drawn, unit_weight*torch.ones(k, 1))
+
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
+
+
+class ClsDisagreementQuery(ActiveQuery):
+
+    def query(self, unlabeled_set, labeled_set, k, cls, unit_weight):
+        x = Variable(unlabeled_set.data_tensor).type(settings.dtype)
+        pred = torch.sign(cls.model(x))
+        fit_pred = torch.sign(cls.fit_model(x))
+        disagreement_area = (pred != fit_pred).data.cpu().numpy()
+        disagreement_idxs = np.argwhere(disagreement_area).reshape(-1)
+        print('dis', len(disagreement_idxs))
+        drawn = torch.from_numpy(
+            np.random.choice(disagreement_idxs, k, replace=False))
+        x_selected, y_selected = self.update(
+            unlabeled_set, labeled_set, drawn, unit_weight*torch.ones(k, 1))
+
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
+
+
 class HeuristicRelabel(object):
 
     @staticmethod
-    def confidence_scores(data, votes, k, pho_p, pho_n):
+    def local_confidence_scores(data, votes, k, pho_p, pho_n):
         p_d = distance.squareform(distance.pdist(data))
         sigma = np.mean(np.sort(p_d, axis=1)[:, :k])
         K = np.exp(-p_d**2/sigma**2)
@@ -127,7 +172,7 @@ class HeuristicRelabel(object):
         return conf
 
     def diverse_flipped(self, labeled_set, num_clss, k, kn, pho_p, pho_n):
-        conf = self.confidence_scores(
+        conf = self.local_confidence_scores(
             labeled_set.data_tensor.numpy().reshape(len(labeled_set), -1),
             labeled_set.target_tensor.numpy(), kn, pho_p, pho_n)
         noise_rate = (pho_p + pho_n)/2 * 100
@@ -139,6 +184,43 @@ class HeuristicRelabel(object):
         possible_query_indices = np.logical_and(th1 <= conf, conf < th2)
         possible_query_indices = np.argwhere(
             possible_query_indices).reshape(-1)
+        indices_datasets = []
+        for _ in range(num_clss):
+            if k <= len(possible_query_indices):
+                flipped_idxs = np.random.choice(
+                    possible_query_indices, k, replace=False)
+            else:
+                flipped_idxs = possible_query_indices
+            new_set = labeled_set.modify(flipped_idxs)
+            indices_datasets.append((flipped_idxs, new_set))
+        return indices_datasets, drop_indices
+
+
+class ClsHeuristicRelabel(object):
+
+    @staticmethod
+    def cls_confidence_scores(labeled_set, cls):
+        x = Variable(labeled_set.data_tensor).type(settings.dtype)
+        target = Variable(
+            torch.sign(labeled_set.target_tensor)).type(settings.dtype)
+
+        output = cls.model(x)
+        conf = cls.basic_loss(
+            -output*target, False).data.cpu().numpy().reshape(-1)
+        return conf
+
+    def diverse_flipped(self, labeled_set, num_clss, k, cls, pho_p, pho_n):
+        conf = self.cls_confidence_scores(labeled_set, cls)
+        noise_rate = (pho_p + pho_n)/2 * 100
+        th1 = np.percentile(conf, noise_rate/3)
+        th2 = np.percentile(conf, noise_rate+20)
+        print(th1, th2)
+        drop_indices = np.argwhere(conf < th1).reshape(-1)
+        labeled_set.drop(drop_indices)
+        possible_query_indices = np.logical_and(th1 <= conf, conf < th2)
+        possible_query_indices = np.argwhere(
+            possible_query_indices).reshape(-1)
+        print(len(possible_query_indices))
         indices_datasets = []
         for _ in range(num_clss):
             if k <= len(possible_query_indices):

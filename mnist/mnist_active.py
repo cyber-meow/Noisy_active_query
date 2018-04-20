@@ -12,13 +12,13 @@ from collections import OrderedDict
 
 import dataset
 import settings
-from active_query import RandomQuery, IWALQuery
+from active_query import RandomQuery, IWALQuery, HeuristicRelabel
 from classifier import Classifier, majority_vote
 from mnist.basics import Net, Linear
 
 
 pho_p = 0.2
-pho_n = 0.2
+pho_n = 0
 
 batch_size = 40
 learning_rate = 1e-3
@@ -26,16 +26,17 @@ weight_decay = 1e-2
 
 init_convex_epochs = 10
 retrain_convex_epochs = 3
-retrain_epochs = 60
+retrain_epochs = 40
 test_on_train = False
 
-num_clss = 1
+num_clss = 5
 init_size = 100
 
 used_size = 90
-incr_times = 3
-query_batch_size = 60
+incr_times = 10
+query_batch_size = 20
 reduced_sample_size = 2
+neigh_size = 5
 
 init_weight = 1
 weight_ratio = 2
@@ -170,6 +171,9 @@ for incr in range(incr_times+1):
             cls.train(labeled_set, test_set, batch_size,
                       retrain_epochs, convex_epochs, used_size,
                       test_on_train=test_on_train)
+        labeled_set.is_used_tensor[:] = 1
+        HeuristicRelabel().diverse_flipped(
+            labeled_set, 0, 0, neigh_size, pho_p, pho_n)
         selected = IWALQuery.query(
             unlabeled_set, labeled_set, query_batch_size, clss, weight_ratio)
         used_size += len(selected[0]) - reduced_sample_size
@@ -181,6 +185,9 @@ for incr in range(incr_times+1):
         cls.train(
             labeled_set_rand, test_set, batch_size,
             retrain_epochs, convex_epochs, test_on_train=test_on_train)
+    labeled_set_rand.is_used_tensor[:] = 1
+    HeuristicRelabel().diverse_flipped(
+        labeled_set_rand, 0, 0, neigh_size, pho_p, pho_n)
     RandomQuery().query(
         unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
     if num_clss > 1:

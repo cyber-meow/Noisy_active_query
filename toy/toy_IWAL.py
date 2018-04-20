@@ -13,8 +13,8 @@ from toy.basics import Net, ToyClassifier
 
 
 moons = True
-n_positive = 5000
-n_negative = 5000
+n_positive = 10000
+n_negative = 10000
 n = n_positive + n_negative
 
 pho_p = 0.5
@@ -25,17 +25,17 @@ pho_n_c = pho_n
 learning_rate = 5e-3
 weight_decay = 1e-3
 
-convex_epochs = 500
+convex_epochs = 1000
 retrain_epochs = 16000
-final_epochs = 24000
+final_epochs = 18000
 
 num_clss = 2
-init_size = 90
+init_size = 80
 kcenter = False
 
-used_size = 80
-incr_times = 8
-query_batch_size = 6
+used_size = 75
+incr_times = 6
+query_batch_size = 8
 reduced_sample_size = 1
 
 init_weight = 1
@@ -83,7 +83,8 @@ def create_new_classifier():
             pho_p=pho_p_c,
             pho_n=pho_n_c,
             lr=learning_rate,
-            weight_decay=weight_decay)
+            weight_decay=weight_decay,
+            weighted=True)
     return cls
 
 

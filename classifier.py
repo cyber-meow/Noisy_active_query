@@ -14,7 +14,8 @@ import settings
 class Classifier(object):
 
     def __init__(self, model, pho_p=0, pho_n=0,
-                 lr=5e-3, weight_decay=1e-2, weighted=False):
+                 lr=5e-3, weight_decay=1e-2, weighted=False,
+                 use_best=False, use_critic=False):
         self.model = model
         self.lr = lr
         self.weight_decay = weight_decay
@@ -23,6 +24,10 @@ class Classifier(object):
         self.weighted = weighted
         self.smallest_conf = 0
         self.critic_model = None
+        self.fit_model = None
+        self.best_model = None
+        self.use_best = use_best
+        self.use_critic = use_critic
         self.test_accuracies = []
         self.train_accuracies = []
         # self.high_loss_fractions = []
@@ -43,6 +48,7 @@ class Classifier(object):
               test_interval=1, print_interval=1, test_on_train=False):
 
         self.init_optimizer()
+        self.best_accuracy = 0
 
         if used_size is None:
             train_loader = data.DataLoader(
@@ -81,8 +87,12 @@ class Classifier(object):
                 self.test(test_set, 'Test', to_print)
                 self.find_high_loss_samples(labeled_set, to_print)
 
-        if self.critic_model is not None:
+        self.fit_model = self.model
+
+        if self.critic_model is not None and self.use_critic:
             self.model = self.critic_model
+        if self.best_model is not None and self.use_best:
+            self.model = self.best_model
         if test_on_train:
             self.test(labeled_set, 'Train')
             self.train_accuracies.pop()
@@ -168,6 +178,9 @@ class Classifier(object):
         pred = torch.sign(output)
         correct = torch.sum(pred.eq(target).float()).data[0]
         accuracy = 100 * correct/len(test_set)
+        if accuracy > self.best_accuracy:
+            self.best_accuracy = accuracy
+            self.best_model = deepcopy(self.model)
         if set_name == 'Test':
             self.test_accuracies.append(accuracy)
         if set_name == 'Train':

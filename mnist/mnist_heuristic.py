@@ -18,24 +18,19 @@ from classifier import Classifier
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.4
-pho_n = 0.1
+pho_p = 0.3
+pho_n = 0.3
 
 batch_size = 40
 learning_rate = 1e-3
 weight_decay = 1e-2
 
-convex_epochs = 5
+convex_epochs = 10
 retrain_epochs = 100
-test_on_train = True
+test_on_train = False
 
 num_clss = 1
-init_size = 500
-
-used_size = 200
-incr_times = 0
-query_batch_size = 40
-reduced_sample_size = 4
+init_size = 180
 
 init_weight = 1
 weight_ratio = 2
@@ -57,10 +52,6 @@ params = OrderedDict([
     ('retrain_epochs', retrain_epochs),
     ('\nnum_clss', num_clss),
     ('init_size', init_size),
-    ('used_size', used_size),
-    ('incr_times', incr_times),
-    ('query_batch_size', query_batch_size),
-    ('reduced_sample_size', reduced_sample_size),
     ('\ninit_weight', init_weight),
     ('weight_ratio', weight_ratio),
 ])

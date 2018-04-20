@@ -51,13 +51,14 @@ for i, line in enumerate(content):
         xs_a.append(xs_a[-1]+int(line[27:-4])+relabel_size)
 
 print(a_performance)
+print(am_performance)
 print(r_performance)
 
 xs = np.arange(
     init_size, init_size+query_batch_size*query_times+1, query_batch_size)
 xs_a = xs_a[:-1]
 
-if incr_size == 0:
+if len(xs_a) == 0:
     xs_a = xs
 
 plt.plot(xs_a, a_performance, label='active')

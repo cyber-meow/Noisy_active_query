@@ -56,7 +56,7 @@ for i, line in enumerate(content):
             rm_performance.append(per)
 
     if line.startswith('classifier'):
-        per = float(content[i+retrain_epochs][-8:-3])
+        per = float(content[i+retrain_epochs+1][-8:-3])
         if active:
             a_performance[-1] = max(a_performance[-1], per)
             aa_performance[-1] += per
@@ -67,24 +67,29 @@ for i, line in enumerate(content):
     if line.startswith('[torch'):
         xs_a.append(xs_a[-1]+int(line[27:-4]))
 
-print(a_performance)
-print(r_performance)
-
 aa_performance = [per/num_clss for per in aa_performance]
 ra_performance = [per/num_clss for per in ra_performance]
 
+print(r_performance)
+print(a_performance)
+
 xs = np.arange(
     init_size, init_size+query_batch_size*incr_times+1, query_batch_size)
-xs_a = xs_a[:-1]
 
-plt.plot(xs_a, a_performance, label='active best')
-plt.plot(xs_a, aa_performance, label='active average')
-if am_performance != []:
-    plt.plot(xs_a, am_performance, label='active majority')
+xs_a = xs_a[:-1]
+if len(xs_a) == 0:
+    xs_a = xs
+
 plt.plot(xs, r_performance, label='random best')
 plt.plot(xs, ra_performance, label='random average')
 if rm_performance != []:
     plt.plot(xs, rm_performance, label='random majority')
+    print(rm_performance)
+plt.plot(xs_a, a_performance, label='active best')
+plt.plot(xs_a, aa_performance, label='active average')
+if am_performance != []:
+    plt.plot(xs_a, am_performance, label='active majority')
+    print(am_performance)
 plt.xlabel('number of queryied samples')
 plt.ylabel('performace (%)')
 plt.legend()

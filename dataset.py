@@ -1,7 +1,11 @@
 import torch
 import torch.utils.data
 import numpy as np
+from torch.autograd import Variable
+from scipy.spatial import distance
 from copy import deepcopy
+
+import settings
 from k_center import KCenter
 
 
@@ -89,6 +93,70 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
         if not torch.is_tensor(indices):
             indices = torch.from_numpy(indices)
         self.is_used_tensor[indices] = 0
+
+    def drop_large_loss(self, cls, fraction=1/3):
+        x = Variable(self.data_tensor).type(settings.dtype)
+        target = Variable(
+            torch.sign(self.target_tensor)).type(settings.dtype)
+        output = cls.model(x)
+        losses = cls.basic_loss(
+            output*target, False).data.cpu().numpy().reshape(-1)
+        noise_rate = (self.pho_p + self.pho_n)/2 * 100
+        th = np.percentile(losses, 100-noise_rate*fraction)
+        drop_indices = np.argwhere(losses > th).reshape(-1)
+        self.drop(drop_indices)
+        drop_indices_t = torch.from_numpy(drop_indices)
+        noise = (torch.sign(self.target_tensor)[drop_indices_t]
+                 != self.label_tensor[drop_indices_t])
+        print('noise/drop: {}/{}'.format(torch.sum(noise), len(drop_indices)))
+
+    def drop_local_inconsitent(self, k=5, fraction=1/3):
+        p_d = distance.squareform(distance.pdist(
+            self.data_tensor.numpy().reshape(len(self), -1)))
+        sigma = np.mean(np.sort(p_d, axis=1)[:, :k])
+        K = np.exp(-p_d**2/sigma**2)
+        votes = self.target_tensor.numpy().reshape(-1)
+        score = np.sum(K * votes, axis=1) * votes
+        score = 2*score/np.std(score)
+        conf = 1/(1+np.exp(-score))
+        noise_rate = (self.pho_p + self.pho_n)/2 * 100
+        th = np.percentile(conf, noise_rate*fraction)
+        drop_indices = np.argwhere(conf < th).reshape(-1)
+        self.drop(drop_indices)
+        drop_indices_t = torch.from_numpy(drop_indices)
+        noise = (torch.sign(self.target_tensor)[drop_indices_t]
+                 != self.label_tensor[drop_indices_t])
+        print('noise/drop: {}/{}'.format(torch.sum(noise), len(drop_indices)))
+
+    def drop_and(self, cls, k=5, fraction=1/3):
+
+        x = Variable(self.data_tensor).type(settings.dtype)
+        target = Variable(
+            torch.sign(self.target_tensor)).type(settings.dtype)
+        output = cls.model(x)
+        losses = cls.basic_loss(
+            output*target, False).data.cpu().numpy().reshape(-1)
+
+        p_d = distance.squareform(distance.pdist(
+            self.data_tensor.numpy().reshape(len(self), -1)))
+        sigma = np.mean(np.sort(p_d, axis=1)[:, :k])
+        K = np.exp(-p_d**2/sigma**2)
+        votes = self.target_tensor.numpy().reshape(-1)
+        score = np.sum(K * votes, axis=1) * votes
+        score = 2*score/np.std(score)
+        conf = 1/(1+np.exp(-score))
+
+        noise_rate = (self.pho_p + self.pho_n)/2 * 100
+        th_l = np.percentile(losses, 100-noise_rate*fraction)
+        th_c = np.percentile(conf, noise_rate*fraction)
+
+        drop_indices = np.argwhere(np.logical_and(
+            losses > th_l, conf < th_c)).reshape(-1)
+        self.drop(drop_indices)
+        drop_indices_t = torch.from_numpy(drop_indices)
+        noise = (torch.sign(self.target_tensor)[drop_indices_t]
+                 != self.label_tensor[drop_indices_t])
+        print('noise/drop: {}/{}'.format(torch.sum(noise), len(drop_indices)))
 
     def remove_no_effect(self):
         if torch.sum(self.target_tensor == 0) == 0:
