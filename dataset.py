@@ -158,6 +158,12 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
                  != self.label_tensor[drop_indices_t])
         print('noise/drop: {}/{}'.format(torch.sum(noise), len(drop_indices)))
 
+    def drop_noise(self):
+        noise = torch.sign(self.target_tensor) != self.label_tensor
+        noise_idxs = np.argwhere(noise.numpy().reshape(-1)).reshape(-1)
+        self.drop(noise_idxs)
+        print(len(noise_idxs))
+
     def remove_no_effect(self):
         if torch.sum(self.target_tensor == 0) == 0:
             return None, None

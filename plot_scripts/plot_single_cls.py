@@ -30,11 +30,11 @@ content = [line for line in content
 for i, line in enumerate(content):
 
     if line.startswith('Active Query'):
-        per = float(content[i+retrain_epochs+2][-8:-3])
+        per = float(content[i+retrain_epochs+3][-8:-3])
         a_performance.append(per)
 
     if line.startswith('Random Query'):
-        per = float(content[i+retrain_epochs+2][-8:-3])
+        per = float(content[i+retrain_epochs+3][-8:-3])
         r_performance.append(per)
 
 print(r_performance)

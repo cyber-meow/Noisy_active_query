@@ -22,19 +22,19 @@ from mnist.basics import Net, Linear
 pho_p = 0.3
 pho_n = 0.3
 
-batch_size = 100
+batch_size = 40
 learning_rate = 5e-4
-weight_decay = 0
+weight_decay = 5e-2
 
-init_convex_epochs = 10
-retrain_convex_epochs = 5
+init_convex_epochs = 20
+init_epochs = 100
+retrain_convex_epochs = 0
 retrain_epochs = 40
 test_on_train = False
 
-num_clss = 5
-init_size = 180
+init_size = 80
 
-incr_times = 8
+incr_times = 5
 query_batch_size = 40
 incr_pool_size = 700
 
@@ -45,28 +45,30 @@ weight_ratio = 1
 
 use_CNN = True
 kcenter = False
-uncertainty = True
-compare_with_perfect = False
+uncertainty = False
+compare_with_perfect = True
 local_noise_drop = False
 cls_loss_drop = True
+true_noise_drop = False
 
 params = OrderedDict([
     ('kcenter', kcenter),
     ('use_CNN', use_CNN),
     ('uncertainty', uncertainty),
     ('compare_with_perfect', compare_with_perfect),
-    ('local_noise_drop', local_noise_drop),
+    ('\nlocal_noise_drop', local_noise_drop),
     ('cls_loss_drop', cls_loss_drop),
+    ('true_noise_drop', true_noise_drop),
     ('\npho_p', pho_p),
     ('pho_n', pho_n),
     ('\nbatch_size', batch_size),
     ('learning_rate', learning_rate),
     ('weight_decay', weight_decay),
-    ('\ninit_convex_epochs', init_convex_epochs),
+    ('\ninit_epochs', init_epochs),
+    ('init_convex_epochs', init_convex_epochs),
     ('retrain_convex_epochs', retrain_convex_epochs),
     ('retrain_epochs', retrain_epochs),
-    ('\nnum_clss', num_clss),
-    ('init_size', init_size),
+    ('\ninit_size', init_size),
     ('incr_times', incr_times),
     ('query_batch_size', query_batch_size),
     ('incr_pool_size', incr_pool_size),
@@ -174,23 +176,39 @@ cls_end = deepcopy(cls)
 cls_rand_end = deepcopy(cls)
 
 
-for incr in range(incr_times+1):
+for incr in range(incr_times):
 
     print('\nincr {}'.format(incr))
     convex_epochs = (init_convex_epochs
                      if incr == 0
                      else retrain_convex_epochs)
+    num_epochs = init_epochs if incr == 0 else retrain_epochs
 
     if not args.no_active:
         print('\nActive Query'.format(incr))
+        labeled_set.is_used_tensor[:] = 1
         if local_noise_drop:
-            labeled_set.is_used_tensor[:] = 1
             labeled_set.drop_local_inconsitent()
-        cls.train(labeled_set, test_set, batch_size, retrain_epochs,
+        cls.train(labeled_set, test_set, batch_size, num_epochs,
                   convex_epochs, test_on_train=test_on_train)
+
+        if incr == 0:
+            cls2 = deepcopy(cls)
+        else:
+            lset = deepcopy(labeled_set)
+            lset.weight_tensor[:] = 1
+            print('')
+            cls2.train(
+                lset, test_set, batch_size,
+                num_epochs, convex_epochs, test_on_train=test_on_train)
+            cls2.model = cls2.best_model
+            cls2.test(test_set, 'Test')
+
         if cls_loss_drop:
-            labeled_set.is_used_tensor[:] = 1
-            labeled_set.drop_and(cls, fraction=1/2)
+            labeled_set.drop_and(cls, fraction=1)
+        if true_noise_drop:
+            labeled_set.drop_noise()
+        labeled_set.weight_tensor[:] *= 1/2
         if uncertainty:
             UncertaintyQuery().query(
                 unlabeled_set, labeled_set, query_batch_size,
@@ -207,19 +225,87 @@ for incr in range(incr_times+1):
                 cls, weight_ratio)
 
     print('\nRandom Query'.format(incr))
+    labeled_set_rand.is_used_tensor[:] = 1
+    if incr < 0:
+        labeled_set_rand.drop_noise()
     if local_noise_drop:
-        labeled_set_rand.is_used_tensor[:] = 1
         labeled_set_rand.drop_local_inconsitent()
     cls_rand.train(
         labeled_set_rand, test_set, batch_size,
-        retrain_epochs, convex_epochs, test_on_train=test_on_train)
-    if cls_loss_drop:
-        labeled_set_rand.is_used_tensor[:] = 1
-        labeled_set_rand.drop_and(cls_rand, fraction=1/2)
-    RandomQuery().query(
-        unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
+        num_epochs, convex_epochs, test_on_train=test_on_train)
     cls_rand.model = cls_rand.best_model
     cls_rand.test(test_set, 'Test')
+
+    if incr == 0:
+        cls_rand2 = deepcopy(cls_rand)
+    else:
+        lsetr = deepcopy(labeled_set_rand)
+        lsetr.weight_tensor[:] = 1
+        print('')
+        cls_rand2.train(
+            lsetr, test_set, batch_size,
+            num_epochs, convex_epochs, test_on_train=test_on_train)
+        cls_rand2.model = cls_rand2.best_model
+        cls_rand2.test(test_set, 'Test')
+
+    if cls_loss_drop:
+        labeled_set_rand.drop_and(cls_rand, fraction=1)
+    if true_noise_drop:
+        labeled_set_rand.drop_noise()
+    # if incr < incr_times:
+        # print('drop all')
+        # labeled_set_rand.is_used_tensor[:] = 0
+    # else:
+        # labeled_set_rand.is_used_tensor[:] = 1
+        # labeled_set_rand.drop_noise()
+    labeled_set_rand.weight_tensor[:] *= 1/2
+    RandomQuery().query(
+        unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
+
+
+print('\nincr {}'.format(incr_times))
+convex_epochs = (init_convex_epochs
+                 if incr_times == 0
+                 else retrain_convex_epochs)
+num_epochs = init_epochs if incr_times == 0 else retrain_epochs
+
+if not args.no_active:
+    print('\nActive Query'.format(incr))
+    if local_noise_drop:
+        labeled_set.is_used_tensor[:] = 1
+        labeled_set.drop_local_inconsitent()
+    cls.train(labeled_set, test_set, batch_size, num_epochs,
+              convex_epochs, test_on_train=test_on_train)
+    cls.model = cls.best_model
+    cls.test(test_set, 'Test')
+
+    lset = deepcopy(labeled_set)
+    lset.weight_tensor[:] = 1
+    print('')
+    cls2.train(
+        lset, test_set, batch_size,
+        num_epochs, convex_epochs, test_on_train=test_on_train)
+    cls2.model = cls2.best_model
+    cls2.test(test_set, 'Test')
+
+print('\nRandom Query'.format(incr_times))
+if local_noise_drop:
+    labeled_set_rand.is_used_tensor[:] = 1
+    labeled_set_rand.drop_local_inconsitent()
+cls_rand.train(
+    labeled_set_rand, test_set, batch_size,
+    num_epochs, convex_epochs, test_on_train=test_on_train)
+cls_rand.model = cls_rand.best_model
+cls_rand.test(test_set, 'Test')
+
+lsetr = deepcopy(labeled_set_rand)
+lsetr.weight_tensor[:] = 1
+print('')
+cls_rand2.train(
+    lsetr, test_set, batch_size,
+    num_epochs, convex_epochs, test_on_train=test_on_train)
+cls_rand2.model = cls_rand2.best_model
+cls_rand2.test(test_set, 'Test')
 
 
 if incr_times > 0:
@@ -231,17 +317,21 @@ if incr_times > 0:
 
     if not args.no_active:
         print('\nActively Selected Points')
+        labeled_set.weight_tensor[:] = 1
         cls.train(
             labeled_set, test_set, batch_size,
-            retrain_epochs*2, init_convex_epochs,
+            init_epochs, init_convex_epochs,
             test_on_train=test_on_train)
         cls.model = cls.best_model
         cls.test(test_set, 'Test')
 
     print('\nRandomly Selected Points')
+    # labeled_set_rand.is_used_tensor[:] = 1
+    # labeled_set_rand.drop_local_inconsitent()
+    labeled_set_rand.weight_tensor[:] = 1
     cls_rand.train(
         labeled_set_rand, test_set, batch_size,
-        retrain_epochs*2, init_convex_epochs,
+        init_epochs, init_convex_epochs,
         test_on_train=test_on_train)
     cls_rand.model = cls_rand.best_model
     cls_rand.test(test_set, 'Test')
