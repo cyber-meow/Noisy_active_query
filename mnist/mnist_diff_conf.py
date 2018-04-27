@@ -4,6 +4,7 @@ import torchvision
 import torchvision.transforms as transforms
 
 import argparse
+# import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 from copy import deepcopy
@@ -12,30 +13,26 @@ from collections import OrderedDict
 import dataset
 import settings
 from active_query import RandomQuery, DisagreementQuery
-from classifier import Classifier, majority_vote
+from classifier import Classifier
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.3
-pho_n = 0.3
+pho_p = 0.4
+pho_n = 0.4
 
 batch_size = 40
 learning_rate = 5e-4
 weight_decay = 5e-2
 
 init_epochs = 100
-init_convex_epochs = 20
+init_convex_epochs = 0
 retrain_convex_epochs = 0
 retrain_epochs = 40
 test_on_train = False
 
-num_clss = 5
 init_size = 100
-
-used_size = 90
-incr_times = 5
+query_times = 5
 query_batch_size = 20
-reduced_sample_size = 2
 
 neigh_size = 5
 init_weight = 1
@@ -43,31 +40,20 @@ init_weight = 1
 use_CNN = True
 kcenter = False
 
-local_noise_drop = False
-cls_loss_drop = True
-true_noise_drop = False
-
 params = OrderedDict([
     ('kcenter', kcenter),
     ('use_CNN', use_CNN),
-    ('\nlocal_noise_drop', local_noise_drop),
-    ('cls_loss_drop', cls_loss_drop),
-    ('true_noise_drop', true_noise_drop),
     ('\npho_p', pho_p),
     ('pho_n', pho_n),
     ('\nbatch_size', batch_size),
     ('learning_rate', learning_rate),
     ('weight_decay', weight_decay),
-    ('\ninit_epochs', init_epochs),
-    ('init_convex_epochs', init_convex_epochs),
-    ('retrain_epochs', retrain_epochs),
+    ('\ninit_convex_epochs', init_convex_epochs),
     ('retrain_convex_epochs', retrain_convex_epochs),
-    ('\nnum_clss', num_clss),
-    ('init_size', init_size),
-    ('used_size', used_size),
-    ('incr_times', incr_times),
+    ('retrain_epochs', retrain_epochs),
+    ('\ninit_size', init_size),
+    ('query_times', query_times),
     ('query_batch_size', query_batch_size),
-    ('reduced_sample_size', reduced_sample_size),
     ('\ninit_weight', init_weight),
 ])
 
@@ -122,6 +108,9 @@ train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
 
 if args.load is not None:
     unlabeled_set, labeled_set, cls = pickle.load(open(args.load, 'rb'))
+    if args.cuda:
+        cls.model = cls.model.cuda()
+    cls.use_best = True
 
 else:
     data_init = (dataset.datasets_initialization_kcenter
@@ -134,13 +123,14 @@ else:
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
 
-
 test_data = mnist_test.test_data.numpy()
 test_labels = mnist_test.test_labels.numpy()
 used_idxs = np.logical_or(test_labels == 3, test_labels == 8)
 test_labels = (test_labels-3)/2.5-1
 # used_idxs = np.logical_or(test_labels == 7, test_labels == 9)
 # test_labels = test_labels-8
+
+# test_data = pca.transform(test_data.reshape(-1, 784))
 
 test_set = data.TensorDataset(
     torch.from_numpy(test_data[used_idxs]).unsqueeze(1).float(),
@@ -162,87 +152,68 @@ def create_new_classifier():
     return cls
 
 
-clss = [create_new_classifier() for _ in range(num_clss)]
-
-if args.load:
-    if args.cuda:
-        cls.model = cls.model.cuda()
-    clss[0] = cls
-
-clss_rand = [deepcopy(cls) for cls in clss]
-cls_end = deepcopy(clss[0])
-cls_rand_end = deepcopy(clss[0])
+if not args.load:
+    cls = create_new_classifier()
+cls_rand = deepcopy(cls)
+cls_end = deepcopy(cls)
+cls_rand_end = deepcopy(cls)
 
 if args.save is not None:
-    pickle.dump((unlabeled_set, labeled_set, clss[0]), open(args.save, 'wb'))
+    pickle.dump((unlabeled_set, labeled_set, cls), open(args.save, 'wb'))
 
 
-for incr in range(incr_times+1):
+for query in range(query_times+1):
 
-    print('\nincr {}'.format(incr))
+    print('\nQuery {}'.format(query))
     convex_epochs = (init_convex_epochs
-                     if incr == 0
+                     if query == 0
                      else retrain_convex_epochs)
-    num_epochs = init_epochs if incr == 0 else retrain_epochs
+    num_epochs = init_epochs if query == 0 else retrain_epochs
 
     if not args.no_active:
 
-        print('\nActive Query'.format(incr))
+        print('\nActive Query'.format(query))
 
-        if local_noise_drop:
-            labeled_set.is_used_tensor[:] = 1
-            labeled_set.drop_local_inconsitent()
+        print('\nClassifier Main')
+        cls.train(labeled_set, test_set, batch_size,
+                  num_epochs, convex_epochs,
+                  test_on_train=test_on_train)
 
-        for i, cls in enumerate(clss):
-            print('\nclassifier {}'.format(i))
-            cls.train(labeled_set, test_set, batch_size,
-                      num_epochs, convex_epochs, used_size,
-                      test_on_train=test_on_train)
+        labeled_set.is_used_tensor[:] = 1
+        labeled_set.drop_and(cls, fraction=1)
+        # labeled_set.drop_local_inconsitent(fraction=0.5)
 
-        if cls_loss_drop:
-            labeled_set.is_used_tensor[:] = 1
-            labeled_set.drop_and(clss[0], fraction=1)
-        if true_noise_drop:
-            labeled_set.is_used_tensor[:] = 1
-            labeled_set.drop_noise()
+        flipped_set = deepcopy(labeled_set)
+        flipped_set.is_used_tensor[:] = 1
+        flipped_set.drop_and(cls, fraction=1.5)
+        # flipped_set.drop_local_inconsitent(fraction=1)
+
+        print('\nClassifier Relaxed')
+        new_cls = deepcopy(cls)
+        new_cls.train(flipped_set, test_set, batch_size, retrain_epochs,
+                      convex_epochs, test_on_train=test_on_train)
+
         labeled_set.weight_tensor[:] *= 1/2
+        DisagreementQuery().query(
+            unlabeled_set, labeled_set, query_batch_size,
+            [cls, new_cls], init_weight)
 
-        if incr < incr_times:
-            selected = DisagreementQuery().query(
-                unlabeled_set, labeled_set,
-                query_batch_size, clss, init_weight)
-            used_size += len(selected[0]) - reduced_sample_size
-        majority_vote(clss, test_set)
+    print('\nRandom Query'.format(query))
 
-    print('\nRandom Query'.format(incr))
+    cls_rand.train(
+        labeled_set_rand, test_set, batch_size,
+        num_epochs, convex_epochs, test_on_train=test_on_train)
 
-    if local_noise_drop:
-        labeled_set_rand.is_used_tensor[:] = 1
-        labeled_set_rand.drop_local_inconsitent()
+    labeled_set_rand.is_used_tensor[:] = 1
+    labeled_set_rand.drop_and(cls_rand, fraction=1.2)
+    # labeled_set_rand.drop_local_inconsitent(fraction=1)
 
-    for i, cls in enumerate(clss_rand):
-        print('\nclassifier {}'.format(i))
-        cls.train(
-            labeled_set_rand, test_set, batch_size,
-            num_epochs, convex_epochs, test_on_train=test_on_train)
-
-    if cls_loss_drop:
-        labeled_set.is_used_tensor[:] = 1
-        labeled_set.drop_and(clss_rand[0], fraction=1)
-    if true_noise_drop:
-        labeled_set.is_used_tensor[:] = 1
-        labeled_set.drop_noise()
     labeled_set_rand.weight_tensor[:] *= 1/2
-
-    if incr < incr_times:
-        RandomQuery().query(
-            unlabeled_set_rand, labeled_set_rand,
-            query_batch_size, init_weight)
-    if num_clss > 1:
-        majority_vote(clss_rand, test_set)
+    RandomQuery().query(
+        unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
 
 
-if incr_times > 0:
+if query_times > 0:
 
     print('\n\nTrain new classifier on selected points')
 

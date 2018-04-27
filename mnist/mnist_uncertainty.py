@@ -4,49 +4,49 @@ import torchvision
 import torchvision.transforms as transforms
 
 import argparse
-# import matplotlib.pyplot as plt
 import numpy as np
-# from sklearn.decomposition import PCA
+import pickle
 from copy import deepcopy
 from collections import OrderedDict
 
 import dataset
 import settings
-from active_query import RandomQuery, UncertaintyQuery
+from active_query import RandomQuery, UncertaintyQuery, AccuCurrDisQuery
 from active_query import DisagreementQuery, ClsDisagreementQuery
-# from active_query import HeuristicRelabel
 from classifier import Classifier
 from mnist.basics import Net, Linear
 
 
-pho_p = 0.3
-pho_n = 0.3
+pho_p = 0.4
+pho_n = 0.4
 
 batch_size = 40
 learning_rate = 5e-4
 weight_decay = 5e-2
 
-init_convex_epochs = 20
 init_epochs = 100
+init_convex_epochs = 0
 retrain_convex_epochs = 0
 retrain_epochs = 40
 test_on_train = False
 
-init_size = 80
+init_size = 100
 
 incr_times = 5
-query_batch_size = 40
+query_batch_size = 20
 incr_pool_size = 700
 
 neigh_size = 5
-
 init_weight = 1
-weight_ratio = 1
+
+drop_fraction = 1
 
 use_CNN = True
 kcenter = False
-uncertainty = False
-compare_with_perfect = True
+
+uncertainty = True
+compare_with_perfect = False
+
 local_noise_drop = False
 cls_loss_drop = True
 true_noise_drop = False
@@ -54,7 +54,7 @@ true_noise_drop = False
 params = OrderedDict([
     ('kcenter', kcenter),
     ('use_CNN', use_CNN),
-    ('uncertainty', uncertainty),
+    ('\nuncertainty', uncertainty),
     ('compare_with_perfect', compare_with_perfect),
     ('\nlocal_noise_drop', local_noise_drop),
     ('cls_loss_drop', cls_loss_drop),
@@ -66,14 +66,14 @@ params = OrderedDict([
     ('weight_decay', weight_decay),
     ('\ninit_epochs', init_epochs),
     ('init_convex_epochs', init_convex_epochs),
-    ('retrain_convex_epochs', retrain_convex_epochs),
     ('retrain_epochs', retrain_epochs),
+    ('retrain_convex_epochs', retrain_convex_epochs),
     ('\ninit_size', init_size),
     ('incr_times', incr_times),
     ('query_batch_size', query_batch_size),
     ('incr_pool_size', incr_pool_size),
     ('\ninit_weight', init_weight),
-    ('weight_ratio', weight_ratio),
+    ('drop_fraction', drop_fraction),
 ])
 
 for key, value in params.items():
@@ -88,6 +88,12 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 
 parser.add_argument('--no-active', action='store_true', default=False,
                     help='disables active learning')
+
+parser.add_argument('--no-random', action='store_true', default=False,
+                    help='disables the random part')
+
+parser.add_argument('--save', help='save the initialization to some file')
+parser.add_argument('--load', help='load the initialization from some file')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -116,21 +122,26 @@ train_labels = (train_labels-3)/2.5-1
 # used_idxs = np.logical_or(train_labels == 7, train_labels == 9)
 # train_labels = train_labels-8
 
-# pca = PCA(n_components=n_pca_components)
-# train_data = pca.fit_transform(train_data.reshape(-1, 784))
-
 train_data = train_data[used_idxs]
 train_labels = train_labels[used_idxs]
 
 train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
 
-data_init = (dataset.datasets_initialization_kcenter
-             if kcenter
-             else dataset.datasets_initialization)
+if args.load is not None:
+    unlabeled_set, labeled_set, cls = pickle.load(open(args.load, 'rb'))
+    if args.cuda:
+        cls.model = cls.model.cuda()
+    cls.use_best = True
 
-unlabeled_set, labeled_set = data_init(
-    train_data, train_labels, init_size, init_weight, pho_p, pho_n)
+else:
+    data_init = (dataset.datasets_initialization_kcenter
+                 if kcenter
+                 else dataset.datasets_initialization)
+
+    unlabeled_set, labeled_set = data_init(
+        train_data, train_labels, init_size, init_weight, pho_p, pho_n)
+
 unlabeled_set_rand = deepcopy(unlabeled_set)
 labeled_set_rand = deepcopy(labeled_set)
 
@@ -142,8 +153,6 @@ used_idxs = np.logical_or(test_labels == 3, test_labels == 8)
 test_labels = (test_labels-3)/2.5-1
 # used_idxs = np.logical_or(test_labels == 7, test_labels == 9)
 # test_labels = test_labels-8
-
-# test_data = pca.transform(test_data.reshape(-1, 784))
 
 test_set = data.TensorDataset(
     torch.from_numpy(test_data[used_idxs]).unsqueeze(1).float(),
@@ -160,7 +169,8 @@ def create_new_classifier():
             pho_p=pho_p,
             pho_n=pho_n,
             lr=learning_rate,
-            weight_decay=weight_decay)
+            weight_decay=weight_decay,
+            use_best=True)
     return cls
 
 
@@ -170,10 +180,14 @@ if not uncertainty and compare_with_perfect:
     perfect_cls.train(training_set, test_set, 200, 4, 1)
 
 
-cls = create_new_classifier()
+if not args.load:
+    cls = create_new_classifier()
 cls_rand = deepcopy(cls)
 cls_end = deepcopy(cls)
 cls_rand_end = deepcopy(cls)
+
+if args.save is not None:
+    pickle.dump((unlabeled_set, labeled_set, cls), open(args.save, 'wb'))
 
 
 for incr in range(incr_times):
@@ -185,127 +199,92 @@ for incr in range(incr_times):
     num_epochs = init_epochs if incr == 0 else retrain_epochs
 
     if not args.no_active:
-        print('\nActive Query'.format(incr))
-        labeled_set.is_used_tensor[:] = 1
-        if local_noise_drop:
-            labeled_set.drop_local_inconsitent()
-        cls.train(labeled_set, test_set, batch_size, num_epochs,
-                  convex_epochs, test_on_train=test_on_train)
 
-        if incr == 0:
-            cls2 = deepcopy(cls)
+        print('\nActive Query'.format(incr))
+
+        if local_noise_drop:
+            labeled_set.is_used_tensor[:] = 1
+            labeled_set.drop_local_inconsitent()
+
         else:
-            lset = deepcopy(labeled_set)
-            lset.weight_tensor[:] = 1
-            print('')
-            cls2.train(
-                lset, test_set, batch_size,
-                num_epochs, convex_epochs, test_on_train=test_on_train)
-            cls2.model = cls2.best_model
-            cls2.test(test_set, 'Test')
+            cls.train(labeled_set, test_set, batch_size, num_epochs,
+                      convex_epochs, test_on_train=test_on_train)
 
         if cls_loss_drop:
-            labeled_set.drop_and(cls, fraction=1)
+            labeled_set.is_used_tensor[:] = 1
+            labeled_set.drop_and(cls, fraction=drop_fraction)
         if true_noise_drop:
+            labeled_set.is_used_tensor[:] = 1
             labeled_set.drop_noise()
+
         labeled_set.weight_tensor[:] *= 1/2
+
         if uncertainty:
             UncertaintyQuery().query(
                 unlabeled_set, labeled_set, query_batch_size,
-                cls, incr_pool_size, weight_ratio)
+                cls, incr_pool_size, init_weight)
+
         elif compare_with_perfect:
             DisagreementQuery().query(
                 unlabeled_set, labeled_set,
-                query_batch_size, [perfect_cls, cls], weight_ratio)
-        cls.model = cls.best_model
-        cls.test(test_set, 'Test')
-        if not uncertainty and not compare_with_perfect:
+                query_batch_size, [perfect_cls, cls], init_weight)
+        else:
             ClsDisagreementQuery().query(
                 unlabeled_set, labeled_set, query_batch_size,
-                cls, weight_ratio)
+                cls, init_weight)
 
-    print('\nRandom Query'.format(incr))
-    labeled_set_rand.is_used_tensor[:] = 1
-    if incr < 0:
-        labeled_set_rand.drop_noise()
-    if local_noise_drop:
-        labeled_set_rand.drop_local_inconsitent()
-    cls_rand.train(
-        labeled_set_rand, test_set, batch_size,
-        num_epochs, convex_epochs, test_on_train=test_on_train)
-    cls_rand.model = cls_rand.best_model
-    cls_rand.test(test_set, 'Test')
+    if not args.no_random:
+        print('\nRandom Query'.format(incr))
 
-    if incr == 0:
-        cls_rand2 = deepcopy(cls_rand)
-    else:
-        lsetr = deepcopy(labeled_set_rand)
-        lsetr.weight_tensor[:] = 1
-        print('')
-        cls_rand2.train(
-            lsetr, test_set, batch_size,
+        if local_noise_drop:
+            labeled_set_rand.is_used_tensor[:] = 1
+            labeled_set_rand.drop_local_inconsitent()
+
+        cls_rand.train(
+            labeled_set_rand, test_set, batch_size,
             num_epochs, convex_epochs, test_on_train=test_on_train)
-        cls_rand2.model = cls_rand2.best_model
-        cls_rand2.test(test_set, 'Test')
 
-    if cls_loss_drop:
-        labeled_set_rand.drop_and(cls_rand, fraction=1)
-    if true_noise_drop:
-        labeled_set_rand.drop_noise()
-    # if incr < incr_times:
-        # print('drop all')
-        # labeled_set_rand.is_used_tensor[:] = 0
-    # else:
-        # labeled_set_rand.is_used_tensor[:] = 1
-        # labeled_set_rand.drop_noise()
-    labeled_set_rand.weight_tensor[:] *= 1/2
-    RandomQuery().query(
-        unlabeled_set_rand, labeled_set_rand, query_batch_size, init_weight)
+        if cls_loss_drop:
+            labeled_set_rand.is_used_tensor[:] = 1
+            labeled_set_rand.drop_and(cls_rand, fraction=drop_fraction)
+        if true_noise_drop:
+            labeled_set_rand.is_used_tensor[:] = 1
+            labeled_set_rand.drop_noise()
+
+        RandomQuery().query(
+            unlabeled_set_rand, labeled_set_rand,
+            query_batch_size, init_weight)
 
 
 print('\nincr {}'.format(incr_times))
+
 convex_epochs = (init_convex_epochs
                  if incr_times == 0
                  else retrain_convex_epochs)
 num_epochs = init_epochs if incr_times == 0 else retrain_epochs
 
 if not args.no_active:
+
     print('\nActive Query'.format(incr))
+
     if local_noise_drop:
         labeled_set.is_used_tensor[:] = 1
         labeled_set.drop_local_inconsitent()
+
     cls.train(labeled_set, test_set, batch_size, num_epochs,
               convex_epochs, test_on_train=test_on_train)
-    cls.model = cls.best_model
-    cls.test(test_set, 'Test')
 
-    lset = deepcopy(labeled_set)
-    lset.weight_tensor[:] = 1
-    print('')
-    cls2.train(
-        lset, test_set, batch_size,
+if not args.no_random:
+
+    print('\nRandom Query'.format(incr_times))
+
+    if local_noise_drop:
+        labeled_set_rand.is_used_tensor[:] = 1
+        labeled_set_rand.drop_local_inconsitent()
+
+    cls_rand.train(
+        labeled_set_rand, test_set, batch_size,
         num_epochs, convex_epochs, test_on_train=test_on_train)
-    cls2.model = cls2.best_model
-    cls2.test(test_set, 'Test')
-
-print('\nRandom Query'.format(incr_times))
-if local_noise_drop:
-    labeled_set_rand.is_used_tensor[:] = 1
-    labeled_set_rand.drop_local_inconsitent()
-cls_rand.train(
-    labeled_set_rand, test_set, batch_size,
-    num_epochs, convex_epochs, test_on_train=test_on_train)
-cls_rand.model = cls_rand.best_model
-cls_rand.test(test_set, 'Test')
-
-lsetr = deepcopy(labeled_set_rand)
-lsetr.weight_tensor[:] = 1
-print('')
-cls_rand2.train(
-    lsetr, test_set, batch_size,
-    num_epochs, convex_epochs, test_on_train=test_on_train)
-cls_rand2.model = cls_rand2.best_model
-cls_rand2.test(test_set, 'Test')
 
 
 if incr_times > 0:
@@ -322,16 +301,11 @@ if incr_times > 0:
             labeled_set, test_set, batch_size,
             init_epochs, init_convex_epochs,
             test_on_train=test_on_train)
-        cls.model = cls.best_model
-        cls.test(test_set, 'Test')
 
-    print('\nRandomly Selected Points')
-    # labeled_set_rand.is_used_tensor[:] = 1
-    # labeled_set_rand.drop_local_inconsitent()
-    labeled_set_rand.weight_tensor[:] = 1
-    cls_rand.train(
-        labeled_set_rand, test_set, batch_size,
-        init_epochs, init_convex_epochs,
-        test_on_train=test_on_train)
-    cls_rand.model = cls_rand.best_model
-    cls_rand.test(test_set, 'Test')
+    if not args.no_random:
+        print('\nRandomly Selected Points')
+        labeled_set_rand.weight_tensor[:] = 1
+        cls_rand.train(
+            labeled_set_rand, test_set, batch_size,
+            init_epochs, init_convex_epochs,
+            test_on_train=test_on_train)

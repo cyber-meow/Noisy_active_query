@@ -23,6 +23,28 @@ class Net(nn.Module):
         return x
 
 
+class MultiNet(nn.Module):
+
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(1, 10, 5, 1)
+        self.conv2 = nn.Conv2d(10, 20, 5, 1)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(4*4*20, 50)
+        self.fc2 = nn.Linear(50, 4)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2, 2)
+        x = x.view(-1, 4*4*20)
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return x
+
+
 class Linear(nn.Module):
 
     def __init__(self):

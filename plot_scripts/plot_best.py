@@ -14,22 +14,20 @@ with open(sys.argv[1]) as f:
             query_batch_size = int(param[1])
         if param[0] == 'incr_times':
             incr_times = int(param[1])
-        if param[0] == 'num_clss':
-            num_clss = int(param[1])
         if line == 'incr 0\n':
             break
     content = f.readlines()
 
 
 a_performance = []
-aa_performance = []
+af_performance = []
 am_performance = []
 r_performance = []
-ra_performance = []
+rf_performance = []
 rm_performance = []
 
-active = True
-xs_a = [init_size]
+active = False
+random = False
 
 
 content = [line for line in content
@@ -41,55 +39,51 @@ for i, line in enumerate(content):
     if line.startswith('Active Query'):
         active = True
         a_performance.append(0)
-        aa_performance.append(0)
+        af_performance.append(0)
 
     if line.startswith('Random Query'):
-        active = False
+        random = True
         r_performance.append(0)
-        ra_performance.append(0)
+        rf_performance.append(0)
 
     if line.startswith('Majority'):
         per = float(line[-8:-3])
         if active:
             am_performance.append(per)
+            active = False
         else:
             rm_performance.append(per)
+            random = False
 
-    if line.startswith('classifier'):
-        per = float(content[i+retrain_epochs+1][-8:-3])
+    if line.startswith('Test set'):
+        per = float(line[-8:-3])
         if active:
             a_performance[-1] = max(a_performance[-1], per)
-            aa_performance[-1] += per
-        else:
+            if af_performance[-1] == 0:
+                af_performance[-1] = per
+        if random:
             r_performance[-1] = max(r_performance[-1], per)
-            ra_performance[-1] += per
-
-    if line.startswith('[torch'):
-        xs_a.append(xs_a[-1]+int(line[27:-4]))
-
-aa_performance = [per/num_clss for per in aa_performance]
-ra_performance = [per/num_clss for per in ra_performance]
+            if rf_performance[-1] == 0:
+                rf_performance[-1] = per
 
 print(r_performance)
 print(a_performance)
+print(rf_performance)
+print(af_performance)
 
 xs = np.arange(
     init_size, init_size+query_batch_size*incr_times+1, query_batch_size)
 
-xs_a = xs_a[:-1]
-if len(xs_a) == 0:
-    xs_a = xs
-
 plt.plot(xs, r_performance, label='random best')
-plt.plot(xs, ra_performance, label='random average')
-if rm_performance != []:
-    plt.plot(xs, rm_performance, label='random majority')
-    print(rm_performance)
-plt.plot(xs_a, a_performance, label='active best')
-plt.plot(xs_a, aa_performance, label='active average')
-if am_performance != []:
-    plt.plot(xs_a, am_performance, label='active majority')
-    print(am_performance)
+plt.plot(xs, rf_performance, label='random first')
+# if rm_performance != []:
+#     plt.plot(xs, rm_performance, label='random majority')
+#     print(rm_performance)
+plt.plot(xs, a_performance, label='active best')
+plt.plot(xs, af_performance, label='active first')
+# if am_performance != []:
+#     plt.plot(xs, am_performance, label='active majority')
+#     print(am_performance)
 plt.xlabel('number of queryied samples')
 plt.ylabel('performace (%)')
 plt.legend()

@@ -2,6 +2,7 @@ import sys
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data as data
 import torch.optim as optim
 from torch.autograd import Variable
@@ -22,16 +23,23 @@ class Classifier(object):
         self.pho_p = pho_p
         self.pho_n = pho_n
         self.weighted = weighted
+
         self.smallest_conf = 0
         self.critic_model = None
         self.fit_model = None
         self.best_model = None
         self.use_best = use_best
         self.use_critic = use_critic
+
         self.test_accuracies = []
         self.train_accuracies = []
+        self.train_noise_accuracies = []
+        self.train_clean_accuracies = []
+        self.noise_fractions = []
         # self.high_loss_fractions = []
         self.critic_confs = []
+        self.noise_confs = []
+        self.clean_confs = []
         self.confs = []
         self.critic_losses = []
         self.high_loss_errors = []
@@ -45,10 +53,20 @@ class Classifier(object):
     def train(self, labeled_set, test_set,
               batch_size, retrain_epochs,
               convex_epochs=None, used_size=None,
-              test_interval=1, print_interval=1, test_on_train=False):
+              test_interval=1, print_interval=1,
+              unlabeled_set=None, test_on_train=False):
 
         self.init_optimizer()
         self.best_accuracy = 0
+
+        if test_on_train:
+            # self.test(labeled_set, 'Train', to_print)
+            self.test_on_train_noise(labeled_set)
+        self.test(test_set, 'Test', True)
+
+        if unlabeled_set is not None:
+            self.sum_to_best = torch.zeros(len(unlabeled_set), 1)
+            self.sum_rest = torch.zeros(len(unlabeled_set), 1)
 
         if used_size is None:
             train_loader = data.DataLoader(
@@ -79,11 +97,19 @@ class Classifier(object):
                 self.train_step(train_loader, epoch)
 
             if (epoch+1) % test_interval == 0 or epoch+1 == retrain_epochs:
+
+                if unlabeled_set is not None:
+                    x = Variable(
+                            unlabeled_set.data_tensor).type(settings.dtype)
+                    output = self.model(x)
+                    self.sum_rest += torch.sign(output).data.cpu()
+
                 to_print = (epoch+1) % print_interval == 0
                 if to_print:
                     sys.stdout.write('Epoch: {}  '.format(epoch))
                 if test_on_train:
-                    self.test(labeled_set, 'Train', to_print)
+                    # self.test(labeled_set, 'Train', to_print)
+                    self.test_on_train_noise(labeled_set)
                 self.test(test_set, 'Test', to_print)
                 self.find_high_loss_samples(labeled_set, to_print)
 
@@ -142,14 +168,16 @@ class Classifier(object):
         x = Variable(labeled_set.data_tensor).type(settings.dtype)
         target = Variable(
             torch.sign(labeled_set.target_tensor)).type(settings.dtype)
-        small_conf_number = int(len(target)*(self.pho_p+self.pho_n)/2)
+        noise_rate = (self.pho_p + self.pho_n)/2
+        small_conf_number = int(len(target)*noise_rate)
         if small_conf_number <= 0:
             return
         output = self.model(x)
         prob = self.basic_loss(
             -output*target, False).data.cpu().numpy().reshape(-1)
+        prob_th = np.percentile(prob, noise_rate*100*3/4)
         # high_loss_fraction = np.sum(prob < 0.4)/len(prob)*100
-        critic_conf = np.mean(np.sort(prob)[:small_conf_number])*100
+        critic_conf = np.mean(prob[prob < prob_th])*100
         logistic_losses = self.basic_loss(
             output*target, True).data.cpu().numpy().reshape(-1)
         high_loss_indices = np.argsort(logistic_losses)[-small_conf_number:]
@@ -163,7 +191,15 @@ class Classifier(object):
         self.critic_confs.append(critic_conf)
         # if to_print:
         #     print('critic confidence {:.2f}%'.format(critic_conf))
+        noise = (torch.sign(labeled_set.target_tensor)
+                 != labeled_set.label_tensor).numpy().reshape(-1).astype(bool)
+        clean = np.logical_not(noise)
+        noise_fraction = np.sum(
+            np.logical_and(noise, prob < prob_th))/np.sum(prob < prob_th)
+        self.noise_fractions.append(noise_fraction*100)
         self.confs.append(np.mean(prob)*100)
+        self.noise_confs.append(np.mean(prob[noise])*100)
+        self.clean_confs.append(np.mean(prob[clean])*100)
         # self.critic_losses.append(critic_loss)
         # self.high_loss_fractions.append(high_loss_fraction)
         self.high_loss_errors.append(error)
@@ -178,9 +214,12 @@ class Classifier(object):
         pred = torch.sign(output)
         correct = torch.sum(pred.eq(target).float()).data[0]
         accuracy = 100 * correct/len(test_set)
-        if accuracy > self.best_accuracy:
+        if accuracy > self.best_accuracy and set_name == 'Test':
             self.best_accuracy = accuracy
             self.best_model = deepcopy(self.model)
+            if hasattr(self, 'sum_to_best'):
+                self.sum_to_best += self.sum_rest
+                self.sum_rest[:] = 0
         if set_name == 'Test':
             self.test_accuracies.append(accuracy)
         if set_name == 'Train':
@@ -188,6 +227,40 @@ class Classifier(object):
         if to_print:
             print('{} set: Accuracy: {}/{} ({:.2f}%)'.format(
                 set_name, correct, len(test_set), accuracy))
+
+    def test_on_train_noise(self, training_set):
+        self.model.eval()
+        x = Variable(training_set.data_tensor).type(settings.dtype)
+        target = Variable(torch.sign(training_set.target_tensor))
+        output = self.model(x).cpu()
+        pred = torch.sign(output)
+        corrects = pred.eq(target).data.numpy().reshape(-1)
+        noise = (torch.sign(training_set.target_tensor)
+                 != training_set.label_tensor).numpy().reshape(-1).astype(bool)
+        clean = np.logical_not(noise)
+        accuracy = 100 * np.mean(corrects)
+        noise_accuracy = 100 * np.mean(corrects[noise])
+        clean_accurary = 100 * np.mean(corrects[clean])
+        self.train_accuracies.append(accuracy)
+        self.train_noise_accuracies.append(noise_accuracy)
+        self.train_clean_accuracies.append(clean_accurary)
+
+
+def MultiClassifier(Classifier):
+
+    def compute_loss(self, output, target, convex_loss=False):
+        loss = F.cross_entropy(output, target)
+        return loss
+
+    def test(self, test_set, set_name, to_print=True):
+        self.model.eval()
+        x = Variable(test_set.data_tensor).type(settings.dtype)
+        target = Variable(test_set.target_tensor).type(settings.dtype)
+        output = self.model(x)
+        pred = output.max(1, keepdim=True)[1]
+        correct = pred.eq(target.view_as(pred)).sum()
+        accuracy = 100 * correct/len(test_set)
+        print(accuracy)
 
 
 def majority_vote(clss, test_set):

@@ -41,10 +41,42 @@ class UncertaintyQuery(ActiveQuery):
     def query(self, unlabeled_set, labeled_set,
               k, cls, incr_pool_size, unit_weight):
         output = cls.model(
-            Variable(unlabeled_set.data_tensor)).type(settings.dtype)
+            Variable(unlabeled_set.data_tensor).type(settings.dtype))
         sigmoid = nn.Sigmoid()
-        probs = sigmoid(output).data.numpy().reshape(-1)
+        probs = sigmoid(output).data.cpu().numpy().reshape(-1)
         s_idxs = np.argsort(np.abs(probs-0.5))[:incr_pool_size]
+        drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
+        x_selected, y_selected = self.update(
+            unlabeled_set, labeled_set, drawn,
+            unit_weight*torch.ones(k, 1))
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
+
+
+class AccuCurrDisQuery(ActiveQuery):
+
+    def query(self, unlabeled_set, labeled_set,
+              k, cls, incr_pool_size, unit_weight):
+        accu_un = cls.sum_to_best.numpy().reshape(-1)
+        x = Variable(unlabeled_set.data_tensor).type(settings.dtype)
+        pred = torch.sign(cls.model(x)).data.cpu().numpy().reshape(-1)
+        s_idxs = np.argsort(accu_un*pred)[:incr_pool_size]
+        print(np.sort(accu_un*pred)[:20])
+        print(cls.model(x).data.cpu().numpy()[s_idxs])
+        print(np.sort(accu_un*pred)[-20:])
+        drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
+        x_selected, y_selected = self.update(
+            unlabeled_set, labeled_set, drawn,
+            unit_weight*torch.ones(k, 1))
+        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
+
+
+class AccuUncertaintyQuery(ActiveQuery):
+
+    def query(self, unlabeled_set, labeled_set,
+              k, cls, incr_pool_size, unit_weight):
+        accu_un = (cls.sum_to_best+cls.sum_rest).numpy().reshape(-1)
+        s_idxs = np.argsort(np.abs(accu_un))[:incr_pool_size]
+        print(np.sum(accu_un == 0))
         drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
         x_selected, y_selected = self.update(
             unlabeled_set, labeled_set, drawn,
@@ -146,8 +178,8 @@ class ClsDisagreementQuery(ActiveQuery):
     def query(self, unlabeled_set, labeled_set, k, cls, unit_weight):
         x = Variable(unlabeled_set.data_tensor).type(settings.dtype)
         pred = torch.sign(cls.model(x))
-        fit_pred = torch.sign(cls.fit_model(x))
-        disagreement_area = (pred != fit_pred).data.cpu().numpy()
+        pred2 = -torch.sign(cls.model2(x))
+        disagreement_area = (pred != pred2).data.cpu().numpy()
         disagreement_idxs = np.argwhere(disagreement_area).reshape(-1)
         print('dis', len(disagreement_idxs))
         drawn = torch.from_numpy(
@@ -194,6 +226,26 @@ class HeuristicRelabel(object):
             new_set = labeled_set.modify(flipped_idxs)
             indices_datasets.append((flipped_idxs, new_set))
         return indices_datasets, drop_indices
+
+
+class HeuristicFlip(HeuristicRelabel):
+
+    def flip(self, labeled_set, k, kn, pho_p, pho_n, fraction=1/3):
+        conf = self.local_confidence_scores(
+            labeled_set.data_tensor.numpy().reshape(len(labeled_set), -1),
+            labeled_set.target_tensor.numpy(), kn, pho_p, pho_n)
+        noise_rate = (pho_p + pho_n)/2 * 100
+        th = np.percentile(conf, noise_rate+5)
+        possible_query_indices = conf <= th
+        possible_query_indices = np.argwhere(
+            possible_query_indices).reshape(-1)
+        if k <= len(possible_query_indices):
+            flipped_idxs = np.random.choice(
+                possible_query_indices, k, replace=False)
+        else:
+            flipped_idxs = possible_query_indices
+        new_set = labeled_set.flip(flipped_idxs)
+        return new_set
 
 
 class ClsHeuristicRelabel(object):

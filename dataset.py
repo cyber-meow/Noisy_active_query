@@ -73,6 +73,16 @@ class WeightedTensorDataset(torch.utils.data.Dataset):
                 new_set.target_tensor[idx] += self.p_weight
         return new_set
 
+    def flip(self, indices):
+        new_set = deepcopy(self)
+        for idx in indices:
+            assert(self.target_tensor[idx][0] != 0)
+            if self.target_tensor[idx][0] > 0:
+                new_set.target_tensor[idx] = -self.n_weight
+            else:
+                new_set.target_tensor[idx] = self.p_weight
+        return new_set
+
     def query(self, indices):
         for idx in indices:
             if self.label_tensor[idx][0] == 1:

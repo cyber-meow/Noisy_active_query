@@ -8,13 +8,12 @@ from torch.autograd import Variable
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
-# from sklearn.decomposition import PCA
 from collections import OrderedDict
 from scipy.spatial import distance
 
 import dataset
 import settings
-from classifier import Classifier
+from double_classifier import DoubleClassifier
 from mnist.basics import Net, Linear
 
 
@@ -22,23 +21,20 @@ pho_p = 0.3
 pho_n = 0.3
 
 batch_size = 40
-learning_rate = 1e-3
-weight_decay = 1e-2
+learning_rate = 5e-5
+weight_decay = 5e-2
 
-convex_epochs = 10
-retrain_epochs = 100
-test_on_train = False
+convex_epochs = 0
+retrain_epochs = 300
+test_on_train = True
 
 num_clss = 1
 init_size = 180
 
 init_weight = 1
-weight_ratio = 2
 
 use_CNN = True
 kcenter = False
-
-n_pca_components = 784
 
 params = OrderedDict([
     ('kcenter', kcenter),
@@ -53,7 +49,6 @@ params = OrderedDict([
     ('\nnum_clss', num_clss),
     ('init_size', init_size),
     ('\ninit_weight', init_weight),
-    ('weight_ratio', weight_ratio),
 ])
 
 for key, value in params.items():
@@ -145,12 +140,13 @@ def create_new_classifier():
         model = Net().cuda() if args.cuda else Net()
     else:
         model = Linear().cuda() if args.cuda else Linear()
-    cls = Classifier(
+    cls = DoubleClassifier(
             model,
             pho_p=pho_p,
             pho_n=pho_n,
             lr=learning_rate,
-            weight_decay=weight_decay)
+            weight_decay=weight_decay,
+            use_best=True)
     return cls
 
 
@@ -168,26 +164,69 @@ cls_conf = sigmoid(out*Variable(
 conf = confidence_scores(
     labeled_set.data_tensor.numpy().reshape(-1, 784),
     labeled_set.target_tensor.numpy())
-print(np.sum(conf < 0.5))
+# print(np.sum(conf < 0.5))
 
 # grid_img = torchvision.utils.make_grid(
 #     labeled_set.data_tensor[torch.from_numpy(np.argsort(conf)[:10])])
 # plt.imshow(np.transpose(grid_img.numpy(), (1, 2, 0)))
 
+'''
 diff = (train_labels != train_labels_clean).reshape(-1)
 plt.plot(diff[np.argsort(conf)], label='conf hit')
 plt.plot(diff[np.argsort(cls_conf)], '--', label='cls conf hit', alpha=0.6)
 plt.plot(np.sort(conf), label='conf')
 plt.plot(np.sort(cls_conf), label='cls conf')
 plt.legend()
+'''
 
 plt.figure()
 plt.plot(cls.train_accuracies, label='train accuracy')
+plt.plot(cls.train_clean_accuracies, label='train clean accuracy')
+plt.plot(cls.train_noise_accuracies, label='train noise accuracy')
 plt.plot(cls.test_accuracies, label='test accuracy')
-# plt.plot(cls.high_loss_fractions, label='fraction of high loss samples')
-plt.plot([100-conf for conf in cls.critic_confs], label='critic conf')
-plt.plot([100-conf for conf in cls.confs], label='conf')
-# plt.plot(cls.critic_losses, label='critic logistic loss')
-plt.plot(cls.high_loss_errors, label='high loss error')
+plt.plot(cls.high_loss_noise_fractions, label='high loss noise fraction')
+plt.plot([100-conf for conf in cls.clean_confs], label='clean loss')
+plt.plot([100-conf for conf in cls.noise_confs], label='noise loss')
 plt.legend()
+plt.title('curves for cls 1')
+
+plt.figure()
+plt.plot(cls.train_accuracies2, label='train accuracy')
+plt.plot(cls.train_clean_accuracies2, label='train clean accuracy')
+plt.plot(cls.train_noise_accuracies2, label='train noise accuracy')
+plt.plot(cls.test_accuracies2, label='test accuracy')
+plt.plot(cls.high_loss_noise_fractions2, label='high loss noise fraction')
+plt.plot([100-conf for conf in cls.clean_confs2], label='clean loss')
+plt.plot([100-conf for conf in cls.noise_confs2], label='noise loss')
+plt.legend()
+plt.title('curves for cls 2')
+
+plt.figure()
+plt.hist([cls.correct_accumulation, cls.clean_correct_accumulation,
+          cls.noise_correct_accumulation], bins=20,
+         label=['all', 'clean', 'noise'])
+plt.legend()
+plt.title('number of correct predictions for cls 1')
+
+plt.figure()
+plt.hist([cls.correct_accumulation2, cls.clean_correct_accumulation2,
+          cls.noise_correct_accumulation2], bins=20,
+         label=['all', 'clean', 'noise'])
+plt.legend()
+plt.title('number of correct predictions for cls 2')
+
+plt.figure()
+plt.hist([cls.correct_accumulation + cls.correct_accumulation2,
+          cls.clean_correct_accumulation + cls.clean_correct_accumulation2,
+          cls.noise_correct_accumulation + cls.noise_correct_accumulation2],
+         bins=20, label=['all', 'clean', 'noise'])
+plt.legend()
+plt.title('number of correct predictions for cls 1+2')
+
+plt.figure()
+plt.plot(cls.dis_nums, label='number of disagreement')
+plt.plot(cls.dis_noise_nums, label='number of noise in disagreement')
+plt.legend()
+plt.title('disagree')
+
 plt.show()
