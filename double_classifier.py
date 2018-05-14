@@ -201,7 +201,7 @@ class DoubleClassifier(object):
             self.best_model = deepcopy(self.model)
         self.test_accuracies.append(accuracy)
         if to_print:
-            print('{} set: Model 1: Accuracy: {}/{} ({:.2f}%)'.format(
+            print('{} set: Accuracy: {}/{} ({:.2f}%)'.format(
                 set_name, correct, len(test_set), accuracy))
 
         self.model2.eval()
@@ -214,7 +214,7 @@ class DoubleClassifier(object):
             self.best_model2 = deepcopy(self.model2)
         self.test_accuracies2.append(accuracy)
         if to_print:
-            print('{} set: Model 2: Accuracy: {}/{} ({:.2f}%)'.format(
+            print('Model 2: {} set: Accuracy: {}/{} ({:.2f}%)'.format(
                 set_name, correct, len(test_set), accuracy))
 
     def test_on_train_noise(self, training_set):

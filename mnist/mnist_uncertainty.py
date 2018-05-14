@@ -11,9 +11,10 @@ from collections import OrderedDict
 
 import dataset
 import settings
-from active_query import RandomQuery, UncertaintyQuery, AccuCurrDisQuery
+from active_query import RandomQuery, UncertaintyQuery
 from active_query import DisagreementQuery, ClsDisagreementQuery
 from classifier import Classifier
+from double_classifier import DoubleClassifier
 from mnist.basics import Net, Linear
 
 
@@ -25,7 +26,7 @@ learning_rate = 5e-4
 weight_decay = 5e-2
 
 init_epochs = 100
-init_convex_epochs = 0
+init_convex_epochs = 20
 retrain_convex_epochs = 0
 retrain_epochs = 40
 test_on_train = False
@@ -44,7 +45,8 @@ drop_fraction = 1
 use_CNN = True
 kcenter = False
 
-uncertainty = True
+uncertainty = False
+double_classif = True
 compare_with_perfect = False
 
 local_noise_drop = False
@@ -55,6 +57,7 @@ params = OrderedDict([
     ('kcenter', kcenter),
     ('use_CNN', use_CNN),
     ('\nuncertainty', uncertainty),
+    ('double_classif', double_classif),
     ('compare_with_perfect', compare_with_perfect),
     ('\nlocal_noise_drop', local_noise_drop),
     ('cls_loss_drop', cls_loss_drop),
@@ -129,10 +132,10 @@ train_data = torch.from_numpy(train_data).unsqueeze(1).float()
 train_labels = torch.from_numpy(train_labels).unsqueeze(1).float()
 
 if args.load is not None:
-    unlabeled_set, labeled_set, cls = pickle.load(open(args.load, 'rb'))
+    unlabeled_set, labeled_set, cls_l = pickle.load(open(args.load, 'rb'))
     if args.cuda:
-        cls.model = cls.model.cuda()
-    cls.use_best = True
+        cls_l.model = cls_l.model.cuda()
+    cls_l.use_best = True
 
 else:
     data_init = (dataset.datasets_initialization_kcenter
@@ -164,7 +167,8 @@ def create_new_classifier():
         model = Net().cuda() if args.cuda else Net()
     else:
         model = Linear().cuda() if args.cuda else Linear()
-    cls = Classifier(
+    classifier = DoubleClassifier if double_classif else Classifier
+    cls = classifier(
             model,
             pho_p=pho_p,
             pho_n=pho_n,
@@ -180,8 +184,9 @@ if not uncertainty and compare_with_perfect:
     perfect_cls.train(training_set, test_set, 200, 4, 1)
 
 
-if not args.load:
-    cls = create_new_classifier()
+cls = create_new_classifier()
+if args.load:
+    cls.model = cls_l.model
 cls_rand = deepcopy(cls)
 cls_end = deepcopy(cls)
 cls_rand_end = deepcopy(cls)
@@ -224,10 +229,16 @@ for incr in range(incr_times):
                 unlabeled_set, labeled_set, query_batch_size,
                 cls, incr_pool_size, init_weight)
 
+        elif double_classif:
+            ClsDisagreementQuery().query(
+                unlabeled_set, labeled_set,
+                query_batch_size, cls, init_weight)
+
         elif compare_with_perfect:
             DisagreementQuery().query(
                 unlabeled_set, labeled_set,
                 query_batch_size, [perfect_cls, cls], init_weight)
+
         else:
             ClsDisagreementQuery().query(
                 unlabeled_set, labeled_set, query_batch_size,

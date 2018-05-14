@@ -29,7 +29,7 @@ retrain_convex_epochs = 0
 retrain_epochs = 40
 test_on_train = False
 
-num_clss = 5
+num_clss = 2
 init_size = 100
 
 used_size = 90
@@ -167,7 +167,7 @@ clss = [create_new_classifier() for _ in range(num_clss)]
 if args.load:
     if args.cuda:
         cls.model = cls.model.cuda()
-    clss[0] = cls
+    clss[0].model = cls.model
 
 clss_rand = [deepcopy(cls) for cls in clss]
 cls_end = deepcopy(clss[0])

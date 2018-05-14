@@ -70,20 +70,6 @@ class AccuCurrDisQuery(ActiveQuery):
         return x_selected, y_selected, unit_weight*torch.ones(k, 1)
 
 
-class AccuUncertaintyQuery(ActiveQuery):
-
-    def query(self, unlabeled_set, labeled_set,
-              k, cls, incr_pool_size, unit_weight):
-        accu_un = (cls.sum_to_best+cls.sum_rest).numpy().reshape(-1)
-        s_idxs = np.argsort(np.abs(accu_un))[:incr_pool_size]
-        print(np.sum(accu_un == 0))
-        drawn = torch.from_numpy(np.random.choice(s_idxs, k, replace=False))
-        x_selected, y_selected = self.update(
-            unlabeled_set, labeled_set, drawn,
-            unit_weight*torch.ones(k, 1))
-        return x_selected, y_selected, unit_weight*torch.ones(k, 1)
-
-
 class IWALQuery(ActiveQuery):
 
     def __init__(self):

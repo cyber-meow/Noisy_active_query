@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 
 
 data = np.genfromtxt(sys.argv[1], delimiter=',')
-ns = [24, 8, 8, 8, 8, 8]
-names = ['Random', 'Bagging', 'Uncertainty', 'Compare with perfect',
-         'Random drop 1.5', 'Conf 1 1.5']
+ns = [32, 8, 8, 8, 8, 8, 8]
+names = ['Random', 'Bagging 2', 'Uncertainty', 'Compare with perfect',
+         'Random drop 1.5', 'Conf 1 1.5', 'Inverse train']
 
 
 def plot_with_variance(m, s, name):
